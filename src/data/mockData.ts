@@ -1,4 +1,4 @@
-import { CitizenReport, EmergencyAlert, EmergencyResource, RoadSegment, RouteOption } from '../types';
+import { CitizenReport, EmergencyAlert, EmergencyResource, LocationPoint, RoadSegment, RouteOption } from '../types';
 import { calculateRoadRisk } from '../utils/riskEngine';
 
 export const INITIAL_RAINFALL_MM_HR = 48; // Moderate to Heavy urban rain
@@ -386,16 +386,80 @@ export const INITIAL_EMERGENCY_ALERTS: EmergencyAlert[] = [
   }
 ];
 
-export const SAMPLE_PRESET_ORIGINS = [
-  { id: 'loc-1', name: 'Downtown Central Station (Lowland)' },
-  { id: 'loc-2', name: 'West Valley Residential' },
-  { id: 'loc-3', name: 'Harbor Gate Commercial' },
-  { id: 'loc-4', name: 'Metro University Hub' }
+export const SAMPLE_PRESET_ORIGINS: LocationPoint[] = [
+  {
+    id: 'loc-kumbakonam',
+    name: 'Kumbakonam, Tamil Nadu',
+    lat: 10.9602,
+    lng: 79.3845,
+    elevationMeters: 26.0,
+    sourceType: 'preset',
+    address: 'Kumbakonam Central, Thanjavur District, Tamil Nadu, India',
+  },
+  {
+    id: 'loc-chennai',
+    name: 'Chennai Central, Tamil Nadu',
+    lat: 13.0827,
+    lng: 80.2707,
+    elevationMeters: 8.0,
+    sourceType: 'preset',
+    address: 'Chennai Central Station Corridor, Tamil Nadu, India',
+  },
+  {
+    id: 'loc-madurai',
+    name: 'Madurai Junction, Tamil Nadu',
+    lat: 9.9252,
+    lng: 78.1198,
+    elevationMeters: 136.0,
+    sourceType: 'preset',
+    address: 'Madurai Junction Area, Tamil Nadu, India',
+  },
+  {
+    id: 'loc-thanjavur',
+    name: 'Thanjavur, Tamil Nadu',
+    lat: 10.7870,
+    lng: 79.1378,
+    elevationMeters: 57.0,
+    sourceType: 'preset',
+    address: 'Thanjavur City Center, Tamil Nadu, India',
+  },
 ];
 
-export const SAMPLE_PRESET_DESTINATIONS = [
-  { id: 'dest-1', name: 'City Airport Terminal Hub' },
-  { id: 'dest-2', name: 'North Medical City & Trauma Hospital' },
-  { id: 'dest-3', name: 'Central Civic Evacuation Shelter' },
-  { id: 'dest-4', name: 'Eastridge Tech & Relief Center' }
+export const SAMPLE_PRESET_DESTINATIONS: LocationPoint[] = [
+  {
+    id: 'dest-trichy',
+    name: 'Trichy (Tiruchirappalli), Tamil Nadu',
+    lat: 10.8062,
+    lng: 78.6846,
+    elevationMeters: 88.0,
+    sourceType: 'preset',
+    address: 'Tiruchirappalli Junction, Tamil Nadu, India',
+  },
+  {
+    id: 'dest-thanjavur',
+    name: 'Thanjavur, Tamil Nadu',
+    lat: 10.7870,
+    lng: 79.1378,
+    elevationMeters: 57.0,
+    sourceType: 'preset',
+    address: 'Thanjavur Highway Hub, Tamil Nadu, India',
+  },
+  {
+    id: 'dest-coimbatore',
+    name: 'Coimbatore, Tamil Nadu',
+    lat: 11.0168,
+    lng: 76.9558,
+    elevationMeters: 411.0,
+    sourceType: 'preset',
+    address: 'Coimbatore Elevated Hub, Tamil Nadu, India',
+  },
+  {
+    id: 'dest-madurai',
+    name: 'Madurai, Tamil Nadu',
+    lat: 9.9252,
+    lng: 78.1198,
+    elevationMeters: 136.0,
+    sourceType: 'preset',
+    address: 'Madurai Bypass Relief Center, Tamil Nadu, India',
+  },
 ];

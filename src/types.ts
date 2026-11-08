@@ -3,6 +3,16 @@ export type WaterLevel = 'none' | 'low' | 'medium' | 'high';
 export type RoadCondition = 'good' | 'fair' | 'poor';
 export type AppPage = 'home' | 'safe-route' | 'report-flood' | 'dashboard';
 
+export interface LocationPoint {
+  id?: string;
+  name: string;
+  lat: number;
+  lng: number;
+  sourceType?: 'preset' | 'map_click' | 'gps' | 'custom_search';
+  address?: string;
+  elevationMeters?: number;
+}
+
 export interface RoadSegment {
   id: string;
   name: string;
@@ -56,7 +66,7 @@ export interface RouteStep {
 }
 
 export interface RouteOption {
-  id: 'route-a' | 'route-b' | 'route-c';
+  id: string;
   name: string;
   via: string;
   distanceKm: number;
@@ -66,11 +76,13 @@ export interface RouteOption {
   isRecommended: boolean;
   recommendationReason: string;
   hasBlockedRoad: boolean;
-  maxWaterLevel: WaterLevel;
-  roadIds: string[];
+  maxWaterLevel?: WaterLevel;
+  roadIds?: string[];
   steps: RouteStep[];
-  pathD: string;
-  tag: string;
+  pathD?: string;
+  tag?: string;
+  points?: { lat: number; lng: number }[];
+  bounds?: { northeast: { lat: number; lng: number }; southwest: { lat: number; lng: number } };
 }
 
 export interface EmergencyResource {

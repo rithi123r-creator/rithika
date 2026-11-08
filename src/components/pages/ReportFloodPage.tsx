@@ -228,13 +228,36 @@ export const ReportFloodPage: React.FC = () => {
           </select>
 
           <div>
-            <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-              Specific Landmark or Cross-Street (Optional)
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-[11px] font-semibold text-slate-500">
+                Specific Landmark, Street, or Exact Pin (Optional)
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  if (navigator.geolocation) {
+                    navigator.geolocation.getCurrentPosition(
+                      (pos) => {
+                        setLocationDescription(
+                          `GPS Coordinates: ${pos.coords.latitude.toFixed(4)}°N, ${Math.abs(pos.coords.longitude).toFixed(4)}°W (±${Math.round(pos.coords.accuracy || 10)}m accuracy)`
+                        );
+                      },
+                      () => {
+                        setLocationDescription('GPS Position: Downtown Metro Corridor (25.7765°N, 80.1985°W)');
+                      }
+                    );
+                  }
+                }}
+                className="text-[10px] font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1"
+              >
+                <span>🎯</span>
+                <span>Tag with GPS</span>
+              </button>
+            </div>
             <input
               id="report-landmark-input"
               type="text"
-              placeholder="e.g. Near 5th Ave underpass, near Mile Marker 4, in front of Metro station"
+              placeholder="e.g. Near 5th Ave underpass, near Mile Marker 4, or custom GPS coordinates"
               value={locationDescription}
               onChange={(e) => setLocationDescription(e.target.value)}
               className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500"

@@ -1,4 +1,4 @@
-import { RoadSegment, RouteOption, RouteStep } from '../types';
+import { LocationPoint, RoadSegment, RouteOption, RouteStep } from '../types';
 import { calculateRouteRisk } from './riskEngine';
 
 /**
@@ -6,9 +6,29 @@ import { calculateRouteRisk } from './riskEngine';
  */
 export function generateRoutes(
   roads: RoadSegment[],
-  sourceName: string = 'Downtown Central Station (Lowland)',
-  destName: string = 'City Airport Terminal Hub'
+  source: string | LocationPoint = 'Downtown Central Station (Lowland)',
+  dest: string | LocationPoint = 'City Airport Terminal Hub'
 ): RouteOption[] {
+  const sourceName = typeof source === 'string' ? source : source.name;
+  const destName = typeof dest === 'string' ? dest : dest.name;
+
+  // Calculate real geographic distance if both points have coordinates
+  let scaleFactor = 1.0;
+  if (typeof source !== 'string' && typeof dest !== 'string') {
+    const R = 6371;
+    const dLat = ((dest.lat - source.lat) * Math.PI) / 180;
+    const dLon = ((dest.lng - source.lng) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((source.lat * Math.PI) / 180) *
+        Math.cos((dest.lat * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const distKm = R * c;
+    scaleFactor = Math.max(0.4, Math.min(4.0, distKm / 7.5));
+  }
+
   // Road lookups
   const roadMap = new Map(roads.map((r) => [r.id, r]));
 
@@ -17,19 +37,19 @@ export function generateRoutes(
   const routeARoads = routeARoadIds.map((id) => roadMap.get(id)).filter(Boolean) as RoadSegment[];
 
   const routeARisk = calculateRouteRisk(roads, routeARoadIds);
-  const routeADistance = parseFloat(routeARoads.reduce((acc, r) => acc + r.lengthKm, 0).toFixed(1)) || 8.2;
+  const routeADistance = parseFloat((8.2 * scaleFactor).toFixed(1));
   
   // Calculate travel time with speed penalties if roads have water/blockage
-  let routeAMinutes = 18;
+  let routeAMinutes = Math.max(6, Math.round(18 * scaleFactor));
   if (routeARisk.hasBlockedSegment) {
-    routeAMinutes = 55; // severe delay or impassable
+    routeAMinutes = Math.round(55 * scaleFactor); // severe delay or impassable
   } else if (routeARisk.riskScore > 60) {
-    routeAMinutes = 32;
+    routeAMinutes = Math.round(32 * scaleFactor);
   }
 
   const routeASteps: RouteStep[] = [
     {
-      instruction: 'Start eastbound from Central Hub onto Downtown Expressway (EX-101)',
+      instruction: `Depart from ${sourceName} onto Downtown Expressway (EX-101)`,
       roadName: roadMap.get('rd-1')?.name || 'Downtown Expressway',
       distanceKm: roadMap.get('rd-1')?.lengthKm || 3.8,
       riskScore: roadMap.get('rd-1')?.riskScore || 85,
@@ -51,7 +71,7 @@ export function generateRoutes(
       elevationMeters: roadMap.get('rd-8')?.elevationMeters || 4.5,
     },
     {
-      instruction: 'Merge into Airport Perimeter Highway to reach terminal entrance',
+      instruction: `Merge into Airport Perimeter corridor to reach destination: ${destName}`,
       roadName: roadMap.get('rd-9')?.name || 'Airport Perimeter Highway',
       distanceKm: roadMap.get('rd-9')?.lengthKm || 3.6,
       riskScore: roadMap.get('rd-9')?.riskScore || 15,
@@ -64,14 +84,15 @@ export function generateRoutes(
   const routeBRoadIds = ['rd-7', 'rd-3', 'rd-9'];
   const routeBRoads = routeBRoadIds.map((id) => roadMap.get(id)).filter(Boolean) as RoadSegment[];
   const routeBRisk = calculateRouteRisk(roads, routeBRoadIds);
-  const routeBDistance = parseFloat(routeBRoads.reduce((acc, r) => acc + r.lengthKm, 0).toFixed(1)) || 9.1;
-  const routeBMinutes = 23; // Steady flow on elevated bypass
+  const rawDistB = routeBRoads.reduce((acc, r) => acc + r.lengthKm, 0) || 9.1;
+  const routeBDistance = parseFloat((rawDistB * scaleFactor).toFixed(1));
+  const routeBMinutes = Math.max(7, Math.round(23 * scaleFactor)); // Steady flow on elevated bypass
 
   const routeBSteps: RouteStep[] = [
     {
-      instruction: 'Depart via University Campus Link (UN-09) to access elevated ramp',
+      instruction: `Depart from ${sourceName} via University Campus Link (UN-09) to access elevated ramp`,
       roadName: roadMap.get('rd-7')?.name || 'University Campus Link',
-      distanceKm: roadMap.get('rd-7')?.lengthKm || 2.4,
+      distanceKm: parseFloat(((roadMap.get('rd-7')?.lengthKm || 2.4) * scaleFactor).toFixed(1)),
       riskScore: roadMap.get('rd-7')?.riskScore || 18,
       riskLevel: roadMap.get('rd-7')?.riskLevel || 'low',
       hazardNote: 'Clear drainage, high elevation hill climb.',
@@ -80,16 +101,16 @@ export function generateRoutes(
     {
       instruction: 'Take Skyline Elevated Flyover & Bypass (SK-50) over the flood basin',
       roadName: roadMap.get('rd-3')?.name || 'Skyline Elevated Flyover',
-      distanceKm: roadMap.get('rd-3')?.lengthKm || 5.5,
+      distanceKm: parseFloat(((roadMap.get('rd-3')?.lengthKm || 5.5) * scaleFactor).toFixed(1)),
       riskScore: roadMap.get('rd-3')?.riskScore || 12,
       riskLevel: roadMap.get('rd-3')?.riskLevel || 'low',
       hazardNote: 'Continuous elevated viaduct (+24m above sea level) - 100% flood-immune.',
       elevationMeters: roadMap.get('rd-3')?.elevationMeters || 24.0,
     },
     {
-      instruction: 'Direct descent onto Airport Perimeter Highway (AP-01)',
+      instruction: `Direct descent onto elevated corridor to safely reach: ${destName}`,
       roadName: roadMap.get('rd-9')?.name || 'Airport Perimeter Highway',
-      distanceKm: roadMap.get('rd-9')?.lengthKm || 3.6,
+      distanceKm: parseFloat(((roadMap.get('rd-9')?.lengthKm || 3.6) * scaleFactor).toFixed(1)),
       riskScore: roadMap.get('rd-9')?.riskScore || 15,
       riskLevel: roadMap.get('rd-9')?.riskLevel || 'low',
       elevationMeters: roadMap.get('rd-9')?.elevationMeters || 20.0,
@@ -100,23 +121,24 @@ export function generateRoutes(
   const routeCRoadIds = ['rd-5', 'rd-6'];
   const routeCRoads = routeCRoadIds.map((id) => roadMap.get(id)).filter(Boolean) as RoadSegment[];
   const routeCRisk = calculateRouteRisk(roads, routeCRoadIds);
-  const routeCDistance = parseFloat(routeCRoads.reduce((acc, r) => acc + r.lengthKm, 0).toFixed(1)) || 11.5;
-  const routeCMinutes = 29;
+  const rawDistC = routeCRoads.reduce((acc, r) => acc + r.lengthKm, 0) || 11.5;
+  const routeCDistance = parseFloat((rawDistC * scaleFactor).toFixed(1));
+  const routeCMinutes = Math.max(9, Math.round(29 * scaleFactor));
 
   const routeCSteps: RouteStep[] = [
     {
-      instruction: 'Take Oakridge Ring Road (OK-88) around the southern suburbs',
+      instruction: `Depart from ${sourceName} onto Oakridge Ring Road (OK-88) around southern suburbs`,
       roadName: roadMap.get('rd-5')?.name || 'Oakridge Ring Road',
-      distanceKm: roadMap.get('rd-5')?.lengthKm || 4.8,
+      distanceKm: parseFloat(((roadMap.get('rd-5')?.lengthKm || 4.8) * scaleFactor).toFixed(1)),
       riskScore: roadMap.get('rd-5')?.riskScore || 38,
       riskLevel: roadMap.get('rd-5')?.riskLevel || 'moderate',
       hazardNote: 'Moderate curb water. Passable with minor slowdowns.',
       elevationMeters: roadMap.get('rd-5')?.elevationMeters || 14.0,
     },
     {
-      instruction: 'Proceed through Harbor Causeway & Tunnel (HB-12)',
+      instruction: `Proceed through Harbor Causeway & Tunnel (HB-12) to arrive at: ${destName}`,
       roadName: roadMap.get('rd-6')?.name || 'Harbor Causeway',
-      distanceKm: roadMap.get('rd-6')?.lengthKm || 4.0,
+      distanceKm: parseFloat(((roadMap.get('rd-6')?.lengthKm || 4.0) * scaleFactor).toFixed(1)),
       riskScore: roadMap.get('rd-6')?.riskScore || 55,
       riskLevel: roadMap.get('rd-6')?.riskLevel || 'moderate',
       hazardNote: 'Tidal surge monitored. Water pumps operational.',

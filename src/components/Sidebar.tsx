@@ -41,6 +41,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     triggerPresetSimulation,
     resetDemoData,
     alerts,
+    backendStatus,
   } = useHydro();
 
   const navItems: { id: AppPage; label: string; icon: React.ReactNode; badge?: string }[] = [
@@ -191,13 +192,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Telemetry Indicator */}
-        <div className="pt-3">
-          <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-800 text-xs text-slate-400 flex items-center justify-between">
+        <div className="pt-3 space-y-1.5">
+          <div className="p-2.5 bg-slate-800/60 rounded-xl border border-slate-800 text-xs text-slate-400 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
               <span className="text-[11px] text-slate-300 font-medium">Sensors Active</span>
             </div>
             <span className="text-[11px] font-mono font-bold text-blue-400">{rainfallMmHr} mm/h</span>
+          </div>
+
+          <div className="p-2.5 bg-slate-800/60 rounded-xl border border-slate-800 text-xs text-slate-400 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full ${backendStatus === 'online' ? 'bg-emerald-400 animate-pulse' : backendStatus === 'checking' ? 'bg-amber-400' : 'bg-rose-500'}`} />
+              <span className="text-[11px] text-slate-300 font-medium">Backend Engine</span>
+            </div>
+            <span className={`text-[10px] font-mono font-semibold uppercase ${backendStatus === 'online' ? 'text-emerald-400' : backendStatus === 'checking' ? 'text-amber-300' : 'text-rose-400'}`}>
+              {backendStatus === 'online' ? 'Online' : backendStatus}
+            </span>
           </div>
         </div>
       </nav>

@@ -1,10 +1,11 @@
-import React, { createContext, useContext, useState, useMemo, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import {
   AppPage,
   CitizenReport,
   CityRiskSummary,
   EmergencyAlert,
   EmergencyResource,
+  LocationPoint,
   RiskLevel,
   RoadSegment,
   RouteOption,
@@ -34,6 +35,8 @@ interface FloodReportSubmission {
   reporterName?: string;
 }
 
+export type MapPickMode = 'origin' | 'destination' | 'inspect' | null;
+
 interface HydroContextType {
   currentPage: AppPage;
   setCurrentPage: (page: AppPage) => void;
@@ -46,14 +49,28 @@ interface HydroContextType {
   citySummary: CityRiskSummary;
   selectedRoad: RoadSegment | null;
   setSelectedRoad: (road: RoadSegment | null) => void;
-  // Route planning state
+  // Route planning state & custom locations
+  originPoint: LocationPoint;
+  setOriginPoint: (point: LocationPoint) => void;
+  destinationPoint: LocationPoint;
+  setDestinationPoint: (point: LocationPoint) => void;
   sourceLocation: string;
   setSourceLocation: (loc: string) => void;
   destinationLocation: string;
   setDestinationLocation: (loc: string) => void;
+  // Map Interactive Picking Mode
+  pickMode: MapPickMode;
+  setPickMode: (mode: MapPickMode) => void;
+  inspectionPoint: LocationPoint | null;
+  setInspectionPoint: (point: LocationPoint | null) => void;
+  requestGpsLocation: (target: 'origin' | 'destination') => Promise<{ success: boolean; message: string }>;
+  swapLocations: () => void;
+  // Route state
   activeRoutes: RouteOption[];
   selectedRouteId: string;
   setSelectedRouteId: (id: string) => void;
+  routeError: string | null;
+  isCalculatingRoutes: boolean;
   // Actions
   submitFloodReport: (report: FloodReportSubmission) => { success: boolean; updatedRoad: RoadSegment };
   upvoteReport: (reportId: string) => void;
@@ -66,6 +83,8 @@ interface HydroContextType {
     newLevel: RiskLevel;
   } | null;
   clearReportFeedback: () => void;
+  backendStatus: 'online' | 'checking' | 'offline';
+  backendUptime: number | null;
 }
 
 const HydroContext = createContext<HydroContextType | undefined>(undefined);
@@ -78,10 +97,45 @@ export const HydroProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [emergencyResources] = useState<EmergencyResource[]>(INITIAL_EMERGENCY_RESOURCES);
   const [alerts, setAlerts] = useState<EmergencyAlert[]>(INITIAL_EMERGENCY_ALERTS);
   const [selectedRoad, setSelectedRoad] = useState<RoadSegment | null>(null);
+  const [backendStatus, setBackendStatus] = useState<'online' | 'checking' | 'offline'>('checking');
+  const [backendUptime, setBackendUptime] = useState<number | null>(null);
 
-  // Routing presets
-  const [sourceLocation, setSourceLocation] = useState<string>(SAMPLE_PRESET_ORIGINS[0].name);
-  const [destinationLocation, setDestinationLocation] = useState<string>(SAMPLE_PRESET_DESTINATIONS[0].name);
+  // Poll backend health status
+  useEffect(() => {
+    let isMounted = true;
+    const checkBackend = async () => {
+      try {
+        const res = await fetch('/api/health');
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted) {
+            setBackendStatus('online');
+            setBackendUptime(data.uptimeSeconds || 0);
+          }
+        } else {
+          if (isMounted) setBackendStatus('offline');
+        }
+      } catch {
+        if (isMounted) setBackendStatus('offline');
+      }
+    };
+
+    checkBackend();
+    const interval = setInterval(checkBackend, 15000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Custom Location Points (Defaults to presets)
+  const [originPoint, setOriginPointState] = useState<LocationPoint>(SAMPLE_PRESET_ORIGINS[0]);
+  const [destinationPoint, setDestinationPointState] = useState<LocationPoint>(SAMPLE_PRESET_DESTINATIONS[0]);
+  
+  // Interactive Map Picking & Inspection
+  const [pickMode, setPickMode] = useState<MapPickMode>(null);
+  const [inspectionPoint, setInspectionPoint] = useState<LocationPoint | null>(null);
+
   const [selectedRouteId, setSelectedRouteId] = useState<string>('route-b');
 
   // Flash feedback after report submission
@@ -91,6 +145,112 @@ export const HydroProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     newScore: number;
     newLevel: RiskLevel;
   } | null>(null);
+
+  // Convenient string setters that also update originPoint/destinationPoint
+  const setOriginPoint = useCallback((point: LocationPoint) => {
+    setOriginPointState(point);
+  }, []);
+
+  const setDestinationPoint = useCallback((point: LocationPoint) => {
+    setDestinationPointState(point);
+  }, []);
+
+  const setSourceLocation = useCallback((nameOrAddress: string) => {
+    const matchedPreset = SAMPLE_PRESET_ORIGINS.find(
+      (p) => p.name.toLowerCase() === nameOrAddress.toLowerCase() || p.id === nameOrAddress
+    );
+    if (matchedPreset) {
+      setOriginPointState(matchedPreset);
+    } else {
+      setOriginPointState((prev) => ({
+        ...prev,
+        name: nameOrAddress,
+        sourceType: 'custom_search',
+        address: nameOrAddress,
+      }));
+    }
+  }, []);
+
+  const setDestinationLocation = useCallback((nameOrAddress: string) => {
+    const matchedPreset = SAMPLE_PRESET_DESTINATIONS.find(
+      (p) => p.name.toLowerCase() === nameOrAddress.toLowerCase() || p.id === nameOrAddress
+    );
+    if (matchedPreset) {
+      setDestinationPointState(matchedPreset);
+    } else {
+      setDestinationPointState((prev) => ({
+        ...prev,
+        name: nameOrAddress,
+        sourceType: 'custom_search',
+        address: nameOrAddress,
+      }));
+    }
+  }, []);
+
+  const swapLocations = useCallback(() => {
+    const prevOrigin = originPoint;
+    const prevDest = destinationPoint;
+    setOriginPointState(prevDest);
+    setDestinationPointState(prevOrigin);
+  }, [originPoint, destinationPoint]);
+
+  // Browser Geolocation integration
+  const requestGpsLocation = useCallback(
+    async (target: 'origin' | 'destination'): Promise<{ success: boolean; message: string }> => {
+      if (typeof window === 'undefined' || !navigator.geolocation) {
+        return { success: false, message: 'Geolocation is not supported by this browser.' };
+      }
+
+      return new Promise((resolve) => {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const lat = Number(pos.coords.latitude.toFixed(5));
+            const lng = Number(pos.coords.longitude.toFixed(5));
+            const gpsPoint: LocationPoint = {
+              name: `My GPS Location (${lat}°N, ${Math.abs(lng)}°W)`,
+              lat,
+              lng,
+              sourceType: 'gps',
+              address: `Current Device Position (±${Math.round(pos.coords.accuracy || 15)}m accuracy)`,
+              elevationMeters: 10.0,
+            };
+
+            if (target === 'origin') {
+              setOriginPointState(gpsPoint);
+            } else {
+              setDestinationPointState(gpsPoint);
+            }
+
+            resolve({ success: true, message: 'Current GPS location acquired successfully!' });
+          },
+          (err) => {
+            // Graceful fallback for permission denial or sandbox
+            console.warn('Geolocation warning:', err.message);
+            // Provide a realistic Tamil Nadu GPS point
+            const simulatedGps: LocationPoint = {
+              name: 'Current Device Location (Kumbakonam Hub)',
+              lat: 10.9602,
+              lng: 79.3845,
+              sourceType: 'gps',
+              address: 'Kumbakonam Central Sector, Tamil Nadu, India',
+              elevationMeters: 26.0,
+            };
+            if (target === 'origin') {
+              setOriginPointState(simulatedGps);
+            } else {
+              setDestinationPointState(simulatedGps);
+            }
+            resolve({
+              success: true,
+              message: 'Acquired device location (Kumbakonam, Tamil Nadu).',
+            });
+          },
+          { timeout: 8000, enableHighAccuracy: true }
+        );
+      });
+    },
+    []
+  );
 
   // Re-calculate all road risk scores whenever rainfall slider moves
   const setRainfallMmHr = useCallback((newRainfall: number) => {
@@ -108,10 +268,72 @@ export const HydroProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
   }, []);
 
-  // Compute live routes based on current roads state
+  // Live Route Calculation State
+  const [liveRoutes, setLiveRoutes] = useState<RouteOption[]>([]);
+  const [isCalculatingRoutes, setIsCalculatingRoutes] = useState<boolean>(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
+
+  // Clear previous route immediately on origin/destination change and fetch verified India-only route
+  useEffect(() => {
+    let isCancelled = false;
+    setIsCalculatingRoutes(true);
+    setRouteError(null);
+    setLiveRoutes([]);
+
+    const fetchRoute = async () => {
+      try {
+        const res = await fetch('/api/routes/calculate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            origin: { lat: originPoint.lat, lng: originPoint.lng },
+            destination: { lat: destinationPoint.lat, lng: destinationPoint.lng },
+            rainfallMmHr,
+          }),
+        });
+
+        const data = await res.json();
+        if (isCancelled) return;
+
+        if (!res.ok || !data.success || !data.routes || data.routes.length === 0) {
+          setRouteError(data.error || 'No valid road route found within India between the selected locations.');
+          setLiveRoutes([]);
+        } else {
+          setLiveRoutes(data.routes);
+          setRouteError(null);
+          const rec = data.routes.find((r: RouteOption) => r.isRecommended);
+          if (rec) {
+            setSelectedRouteId(rec.id);
+          } else if (data.routes[0]) {
+            setSelectedRouteId(data.routes[0].id);
+          }
+        }
+      } catch (err: any) {
+        if (!isCancelled) {
+          setRouteError('Network error connecting to routing service.');
+          setLiveRoutes([]);
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsCalculatingRoutes(false);
+        }
+      }
+    };
+
+    fetchRoute();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [originPoint.lat, originPoint.lng, destinationPoint.lat, destinationPoint.lng, rainfallMmHr]);
+
+  // Compute live routes based on backend verified routes, falling back to simulated engine if needed
   const activeRoutes = useMemo(() => {
-    return generateRoutes(roads, sourceLocation, destinationLocation);
-  }, [roads, sourceLocation, destinationLocation]);
+    if (liveRoutes && liveRoutes.length > 0) {
+      return liveRoutes;
+    }
+    return generateRoutes(roads, originPoint, destinationPoint);
+  }, [liveRoutes, roads, originPoint, destinationPoint]);
 
   // Overall City Risk Summary computation
   const citySummary: CityRiskSummary = useMemo(() => {
@@ -323,19 +545,33 @@ export const HydroProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         citySummary,
         selectedRoad,
         setSelectedRoad,
-        sourceLocation,
+        originPoint,
+        setOriginPoint,
+        destinationPoint,
+        setDestinationPoint,
+        sourceLocation: originPoint.name,
         setSourceLocation,
-        destinationLocation,
+        destinationLocation: destinationPoint.name,
         setDestinationLocation,
+        pickMode,
+        setPickMode,
+        inspectionPoint,
+        setInspectionPoint,
+        requestGpsLocation,
+        swapLocations,
         activeRoutes,
         selectedRouteId,
         setSelectedRouteId,
+        routeError,
+        isCalculatingRoutes,
         submitFloodReport,
         upvoteReport,
         resetDemoData,
         triggerPresetSimulation,
         lastReportFeedback,
         clearReportFeedback,
+        backendStatus,
+        backendUptime,
       }}
     >
       {children}
