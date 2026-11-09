@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import {
   AppPage,
+  CachedOfflineRoute,
   CitizenReport,
   CityRiskSummary,
   EmergencyAlert,
@@ -71,6 +72,12 @@ interface HydroContextType {
   setSelectedRouteId: (id: string) => void;
   routeError: string | null;
   isCalculatingRoutes: boolean;
+  // Offline Navigation State & IndexedDB
+  isNetworkOnline: boolean;
+  isSimulatedOffline: boolean;
+  setIsSimulatedOffline: (sim: boolean) => void;
+  loadOfflineRoute: (cached: CachedOfflineRoute) => void;
+  activeOfflineRouteId: string | null;
   // Actions
   submitFloodReport: (report: FloodReportSubmission) => { success: boolean; updatedRoad: RoadSegment };
   upvoteReport: (reportId: string) => void;
@@ -138,6 +145,26 @@ export const HydroProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const [selectedRouteId, setSelectedRouteId] = useState<string>('route-b');
 
+  // Offline Network Outage & IndexedDB state
+  const [isNetworkOnline, setIsNetworkOnline] = useState<boolean>(
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+  const [isSimulatedOffline, setIsSimulatedOffline] = useState<boolean>(false);
+  const [activeOfflineRouteId, setActiveOfflineRouteId] = useState<string | null>(null);
+
+  // Monitor real-world network connection changes
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleOnline = () => setIsNetworkOnline(true);
+    const handleOffline = () => setIsNetworkOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
   // Flash feedback after report submission
   const [lastReportFeedback, setLastReportFeedback] = useState<{
     roadName: string;
@@ -148,12 +175,35 @@ export const HydroProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Convenient string setters that also update originPoint/destinationPoint
   const setOriginPoint = useCallback((point: LocationPoint) => {
+    setActiveOfflineRouteId(null);
     setOriginPointState(point);
   }, []);
 
   const setDestinationPoint = useCallback((point: LocationPoint) => {
+    setActiveOfflineRouteId(null);
     setDestinationPointState(point);
   }, []);
+
+  const resolveCityCoordinates = (nameOrAddress: string) => {
+    const qClean = nameOrAddress.trim().toLowerCase();
+    const cityMap: Record<string, { lat: number; lng: number; address: string; elevationMeters: number }> = {
+      kumbakonam: { lat: 10.9602, lng: 79.3845, address: 'Kumbakonam, Tamil Nadu, India', elevationMeters: 26.0 },
+      trichy: { lat: 10.8062, lng: 78.6846, address: 'Tiruchirappalli (Trichy), Tamil Nadu, India', elevationMeters: 88.0 },
+      tiruchirappalli: { lat: 10.8062, lng: 78.6846, address: 'Tiruchirappalli (Trichy), Tamil Nadu, India', elevationMeters: 88.0 },
+      thanjavur: { lat: 10.7870, lng: 79.1378, address: 'Thanjavur, Tamil Nadu, India', elevationMeters: 57.0 },
+      chennai: { lat: 13.0827, lng: 80.2707, address: 'Chennai Central, Tamil Nadu, India', elevationMeters: 8.0 },
+      coimbatore: { lat: 11.0168, lng: 76.9558, address: 'Coimbatore, Tamil Nadu, India', elevationMeters: 411.0 },
+      madurai: { lat: 9.9252, lng: 78.1198, address: 'Madurai, Tamil Nadu, India', elevationMeters: 136.0 },
+      bengaluru: { lat: 12.9716, lng: 77.5946, address: 'Bengaluru, Karnataka, India', elevationMeters: 920.0 },
+      bangalore: { lat: 12.9716, lng: 77.5946, address: 'Bengaluru, Karnataka, India', elevationMeters: 920.0 },
+    };
+    for (const [key, coords] of Object.entries(cityMap)) {
+      if (new RegExp(`(^|\\s|,)${key}($|\\s|,)`, 'i').test(qClean)) {
+        return coords;
+      }
+    }
+    return null;
+  };
 
   const setSourceLocation = useCallback((nameOrAddress: string) => {
     const matchedPreset = SAMPLE_PRESET_ORIGINS.find(
@@ -161,14 +211,40 @@ export const HydroProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
     if (matchedPreset) {
       setOriginPointState(matchedPreset);
-    } else {
-      setOriginPointState((prev) => ({
-        ...prev,
-        name: nameOrAddress,
-        sourceType: 'custom_search',
-        address: nameOrAddress,
-      }));
+      return;
     }
+
+    const cityMatch = resolveCityCoordinates(nameOrAddress);
+    if (cityMatch) {
+      setOriginPointState({
+        id: `loc-${Date.now()}`,
+        name: nameOrAddress,
+        lat: cityMatch.lat,
+        lng: cityMatch.lng,
+        elevationMeters: cityMatch.elevationMeters,
+        sourceType: 'custom_search',
+        address: cityMatch.address,
+      });
+      return;
+    }
+
+    // Dynamic backend geocode fallback
+    fetch(`/api/geocode?address=${encodeURIComponent(nameOrAddress)}`)
+      .then((res) => res.json())
+      .then((geo) => {
+        if (geo.success && geo.lat && geo.lng) {
+          setOriginPointState({
+            id: `loc-${Date.now()}`,
+            name: nameOrAddress,
+            lat: Number(geo.lat.toFixed(5)),
+            lng: Number(geo.lng.toFixed(5)),
+            elevationMeters: 22.0,
+            sourceType: 'custom_search',
+            address: geo.address || nameOrAddress,
+          });
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const setDestinationLocation = useCallback((nameOrAddress: string) => {
@@ -177,14 +253,40 @@ export const HydroProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
     if (matchedPreset) {
       setDestinationPointState(matchedPreset);
-    } else {
-      setDestinationPointState((prev) => ({
-        ...prev,
-        name: nameOrAddress,
-        sourceType: 'custom_search',
-        address: nameOrAddress,
-      }));
+      return;
     }
+
+    const cityMatch = resolveCityCoordinates(nameOrAddress);
+    if (cityMatch) {
+      setDestinationPointState({
+        id: `dest-${Date.now()}`,
+        name: nameOrAddress,
+        lat: cityMatch.lat,
+        lng: cityMatch.lng,
+        elevationMeters: cityMatch.elevationMeters,
+        sourceType: 'custom_search',
+        address: cityMatch.address,
+      });
+      return;
+    }
+
+    // Dynamic backend geocode fallback
+    fetch(`/api/geocode?address=${encodeURIComponent(nameOrAddress)}`)
+      .then((res) => res.json())
+      .then((geo) => {
+        if (geo.success && geo.lat && geo.lng) {
+          setDestinationPointState({
+            id: `dest-${Date.now()}`,
+            name: nameOrAddress,
+            lat: Number(geo.lat.toFixed(5)),
+            lng: Number(geo.lng.toFixed(5)),
+            elevationMeters: 22.0,
+            sourceType: 'custom_search',
+            address: geo.address || nameOrAddress,
+          });
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const swapLocations = useCallback(() => {
@@ -273,8 +375,31 @@ export const HydroProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [isCalculatingRoutes, setIsCalculatingRoutes] = useState<boolean>(false);
   const [routeError, setRouteError] = useState<string | null>(null);
 
+  // Directly loads a saved route from IndexedDB without network fetch
+  const loadOfflineRoute = useCallback((cached: CachedOfflineRoute) => {
+    setActiveOfflineRouteId(cached.id);
+    setOriginPointState(cached.origin);
+    setDestinationPointState(cached.destination);
+    setLiveRoutes([cached.route]);
+    setSelectedRouteId(cached.route.id);
+    setRouteError(null);
+    setIsCalculatingRoutes(false);
+  }, []);
+
   // Clear previous route immediately on origin/destination change and fetch verified India-only route
   useEffect(() => {
+    // If an offline route from IndexedDB is actively loaded, preserve it and skip network call
+    if (activeOfflineRouteId) {
+      return;
+    }
+
+    // Check if network is offline or simulated offline is triggered
+    if (isSimulatedOffline || !isNetworkOnline) {
+      setRouteError('Network Outage: Connection unavailable. Operating in Flood Emergency Mode. Select a saved offline route from IndexedDB or browse cached paths.');
+      setIsCalculatingRoutes(false);
+      return;
+    }
+
     let isCancelled = false;
     setIsCalculatingRoutes(true);
     setRouteError(null);
@@ -310,7 +435,7 @@ export const HydroProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       } catch (err: any) {
         if (!isCancelled) {
-          setRouteError('Network error connecting to routing service.');
+          setRouteError('Network error connecting to routing service. Check offline map options.');
           setLiveRoutes([]);
         }
       } finally {
@@ -325,7 +450,7 @@ export const HydroProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => {
       isCancelled = true;
     };
-  }, [originPoint.lat, originPoint.lng, destinationPoint.lat, destinationPoint.lng, rainfallMmHr]);
+  }, [originPoint.lat, originPoint.lng, destinationPoint.lat, destinationPoint.lng, rainfallMmHr, activeOfflineRouteId, isSimulatedOffline, isNetworkOnline]);
 
   // Compute live routes based on backend verified routes, falling back to simulated engine if needed
   const activeRoutes = useMemo(() => {
@@ -461,6 +586,25 @@ export const HydroProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       newLevel: newLevel || 'high',
     });
 
+    // 5. Asynchronously sync report with backend
+    try {
+      fetch('/api/reports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roadId: reportData.roadId,
+          roadName: reportData.roadName,
+          locationDescription: reportData.locationDescription,
+          waterLevel: reportData.waterLevel,
+          isBlocked: reportData.isBlocked,
+          waterDepthCm: reportData.waterDepthCm,
+          photoUrl: reportData.photoUrl,
+          notes: reportData.notes,
+          reporterName: reportData.reporterName,
+        }),
+      }).catch((err) => console.warn('Backend report sync notice:', err));
+    } catch {}
+
     return {
       success: true,
       updatedRoad: targetRoad || roads[0],
@@ -564,6 +708,11 @@ export const HydroProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setSelectedRouteId,
         routeError,
         isCalculatingRoutes,
+        isNetworkOnline,
+        isSimulatedOffline,
+        setIsSimulatedOffline,
+        loadOfflineRoute,
+        activeOfflineRouteId,
         submitFloodReport,
         upvoteReport,
         resetDemoData,

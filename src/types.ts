@@ -134,3 +134,16 @@ export interface RiskBreakdown {
   riskLevel: RiskLevel;
   explanation: string[];
 }
+
+export interface CachedOfflineRoute {
+  id: string;
+  savedAt: string;
+  origin: LocationPoint;
+  destination: LocationPoint;
+  route: RouteOption;
+  pointCount: number;
+  stepCount: number;
+  rainfallMmHr: number;
+  sizeBytesApprox: number;
+  notes?: string;
+}

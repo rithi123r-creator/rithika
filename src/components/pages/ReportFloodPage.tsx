@@ -63,60 +63,137 @@ export const ReportFloodPage: React.FC = () => {
     roads,
     submitFloodReport,
     setCurrentPage,
-    lastReportFeedback,
-    clearReportFeedback,
   } = useHydro();
 
   const [selectedRoadId, setSelectedRoadId] = useState<string>(roads[0]?.id || 'rd-1');
+  const [customRoadName, setCustomRoadName] = useState<string>('');
+  const [isCustomRoad, setIsCustomRoad] = useState<boolean>(false);
   const [locationDescription, setLocationDescription] = useState<string>('');
   const [waterLevel, setWaterLevel] = useState<WaterLevel>('high');
   const [isBlocked, setIsBlocked] = useState<boolean>(true);
   const [waterDepthCm, setWaterDepthCm] = useState<number>(60);
   const [photoUrl, setPhotoUrl] = useState<string>(PHOTO_PRESETS[0].url);
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [isCompressingPhoto, setIsCompressingPhoto] = useState<boolean>(false);
+  const [uploadFeedback, setUploadFeedback] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [notes, setNotes] = useState<string>('Heavy water accumulation. Water level touching car bumpers.');
   const [reporterName, setReporterName] = useState<string>('Citizen Volunteer');
   const [submittedSuccess, setSubmittedSuccess] = useState<boolean>(false);
   const [lastSubmittedRoadName, setLastSubmittedRoadName] = useState<string>('');
 
   const targetRoad = roads.find((r) => r.id === selectedRoadId) || roads[0];
+  const effectiveRoadName = isCustomRoad && customRoadName.trim() ? customRoadName.trim() : targetRoad.name;
 
   const handleSelectPresetPhoto = (preset: typeof PHOTO_PRESETS[0]) => {
     setPhotoUrl(preset.url);
+    setUploadedFileName(null);
     setWaterLevel(preset.level);
     setIsBlocked(preset.isBlocked);
     setWaterDepthCm(preset.depth);
+    setUploadFeedback(`Selected preset: ${preset.label}`);
   };
 
   const handleCustomPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result) {
-          setPhotoUrl(event.target.result as string);
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setSubmitError('Please select a valid photo file (PNG, JPG, or WebP).');
+      return;
+    }
+
+    setSubmitError(null);
+    setIsCompressingPhoto(true);
+    setUploadFeedback('Optimizing and compressing photo...');
+
+    const reader = new FileReader();
+    reader.onerror = () => {
+      setSubmitError('Failed to read image file from your device.');
+      setIsCompressingPhoto(false);
+      setUploadFeedback(null);
+    };
+
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onerror = () => {
+        setSubmitError('Failed to process image data.');
+        setIsCompressingPhoto(false);
+        setUploadFeedback(null);
+      };
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          const maxDim = 1200;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            const compressed = canvas.toDataURL('image/jpeg', 0.82);
+            setPhotoUrl(compressed);
+            setUploadedFileName(file.name);
+            setUploadFeedback(`Photo ready (${(file.size / (1024 * 1024)).toFixed(1)}MB compressed to ${(compressed.length / 1365).toFixed(0)}KB)`);
+          } else {
+            setPhotoUrl(event.target?.result as string);
+            setUploadedFileName(file.name);
+            setUploadFeedback('Photo loaded successfully');
+          }
+        } catch {
+          setPhotoUrl(event.target?.result as string);
+          setUploadedFileName(file.name);
+          setUploadFeedback('Photo loaded successfully');
+        } finally {
+          setIsCompressingPhoto(false);
         }
       };
-      reader.readAsDataURL(file);
-    }
+      img.src = event.target?.result as string;
+    };
+    reader.readAsDataURL(file);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const result = submitFloodReport({
-      roadId: selectedRoadId,
-      roadName: targetRoad.name,
-      locationDescription: locationDescription || `${targetRoad.name} corridor near ${targetRoad.fromLocation}`,
-      waterLevel,
-      isBlocked,
-      waterDepthCm,
-      photoUrl,
-      notes,
-      reporterName: reporterName || 'Verified Citizen',
-    });
+    setIsSubmitting(true);
+    setSubmitError(null);
 
-    if (result.success) {
-      setLastSubmittedRoadName(targetRoad.name);
-      setSubmittedSuccess(true);
+    try {
+      const result = submitFloodReport({
+        roadId: isCustomRoad ? `custom-${Date.now()}` : selectedRoadId,
+        roadName: effectiveRoadName,
+        locationDescription: locationDescription || `${effectiveRoadName} corridor near Kumbakonam/Trichy Highway`,
+        waterLevel,
+        isBlocked,
+        waterDepthCm,
+        photoUrl,
+        notes,
+        reporterName: reporterName || 'Verified Citizen',
+      });
+
+      if (result.success) {
+        setLastSubmittedRoadName(effectiveRoadName);
+        setSubmittedSuccess(true);
+      } else {
+        setSubmitError('Could not process report. Please review fields and try again.');
+      }
+    } catch (err: any) {
+      setSubmitError(err.message || 'Submission failed. Please check network.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -208,24 +285,53 @@ export const ReportFloodPage: React.FC = () => {
         onSubmit={handleSubmit}
         className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-xl space-y-6"
       >
+        {/* Submit Error Banner */}
+        {submitError && (
+          <div className="p-3.5 bg-rose-50 border border-rose-300 rounded-xl text-xs text-rose-700 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{submitError}</span>
+          </div>
+        )}
+
         {/* Step 1: Location Input */}
         <div className="space-y-3">
-          <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-            <MapPin className="w-4 h-4 text-blue-600" />
-            1. Select Flooded Road / Corridor
-          </label>
-          <select
-            id="report-road-select"
-            value={selectedRoadId}
-            onChange={(e) => setSelectedRoadId(e.target.value)}
-            className="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
-          >
-            {roads.map((road) => (
-              <option key={road.id} value={road.id}>
-                {road.code} - {road.name} (Current Risk: {road.riskScore}/100, {road.riskLevel.toUpperCase()})
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center justify-between">
+            <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+              <MapPin className="w-4 h-4 text-blue-600" />
+              1. Select Flooded Road / Corridor
+            </label>
+            <button
+              type="button"
+              onClick={() => setIsCustomRoad(!isCustomRoad)}
+              className="text-[11px] font-bold text-blue-600 hover:text-blue-800 underline"
+            >
+              {isCustomRoad ? '← Pick from list' : '+ Type custom road name'}
+            </button>
+          </div>
+
+          {!isCustomRoad ? (
+            <select
+              id="report-road-select"
+              value={selectedRoadId}
+              onChange={(e) => setSelectedRoadId(e.target.value)}
+              className="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
+            >
+              {roads.map((road) => (
+                <option key={road.id} value={road.id}>
+                  {road.code} - {road.name} (Risk: {road.riskScore}/100, {road.riskLevel.toUpperCase()})
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              id="report-custom-road-input"
+              type="text"
+              placeholder="e.g. NH 36 (Kumbakonam - Thanjavur Highway) or Trichy Main Road"
+              value={customRoadName}
+              onChange={(e) => setCustomRoadName(e.target.value)}
+              className="w-full px-4 py-3 bg-slate-50 border border-blue-400 rounded-xl text-sm font-bold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
+            />
+          )}
 
           <div>
             <div className="flex items-center justify-between mb-1">
@@ -239,11 +345,11 @@ export const ReportFloodPage: React.FC = () => {
                     navigator.geolocation.getCurrentPosition(
                       (pos) => {
                         setLocationDescription(
-                          `GPS Coordinates: ${pos.coords.latitude.toFixed(4)}°N, ${Math.abs(pos.coords.longitude).toFixed(4)}°W (±${Math.round(pos.coords.accuracy || 10)}m accuracy)`
+                          `GPS Coordinates: ${pos.coords.latitude.toFixed(4)}°N, ${pos.coords.longitude.toFixed(4)}°E (±${Math.round(pos.coords.accuracy || 10)}m accuracy)`
                         );
                       },
                       () => {
-                        setLocationDescription('GPS Position: Downtown Metro Corridor (25.7765°N, 80.1985°W)');
+                        setLocationDescription('GPS Position: Kumbakonam Corridor (10.9602°N, 79.3845°E)');
                       }
                     );
                   }
@@ -257,7 +363,7 @@ export const ReportFloodPage: React.FC = () => {
             <input
               id="report-landmark-input"
               type="text"
-              placeholder="e.g. Near 5th Ave underpass, near Mile Marker 4, or custom GPS coordinates"
+              placeholder="e.g. Near Cauvery Bridge, bypass junction, or custom landmark in India"
               value={locationDescription}
               onChange={(e) => setLocationDescription(e.target.value)}
               className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500"
@@ -388,8 +494,48 @@ export const ReportFloodPage: React.FC = () => {
               <Camera className="w-4 h-4 text-blue-600" />
               4. Photo Evidence &amp; Visual Verification
             </span>
-            <span className="text-[11px] text-slate-400 font-normal">Optional / Test Presets Available</span>
+            <span className="text-[11px] text-slate-400 font-normal">Test Presets &amp; Custom Upload</span>
           </label>
+
+          {/* Current Active Photo Preview Card */}
+          {photoUrl && (
+            <div className="relative rounded-2xl overflow-hidden border-2 border-slate-200 bg-slate-900 max-h-56 flex items-center justify-center group shadow-md">
+              <img
+                src={photoUrl}
+                alt="Hazard Evidence Preview"
+                className="w-full h-56 object-cover"
+                referrerPolicy="no-referrer"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/20 to-transparent flex items-end justify-between p-3">
+                <div className="space-y-0.5">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/90 text-white text-[10px] font-bold">
+                    ✓ Photo Attached &amp; Validated
+                  </span>
+                  {uploadedFileName && (
+                    <p className="text-[11px] text-slate-200 font-medium truncate max-w-xs">
+                      {uploadedFileName}
+                    </p>
+                  )}
+                  {uploadFeedback && (
+                    <p className="text-[10px] text-emerald-300 font-mono">
+                      {uploadFeedback}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPhotoUrl(PHOTO_PRESETS[0].url);
+                    setUploadedFileName(null);
+                    setUploadFeedback(null);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-800 text-slate-200 text-xs font-semibold border border-slate-700 transition"
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Quick Realistic Photo Presets */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -425,18 +571,21 @@ export const ReportFloodPage: React.FC = () => {
           </div>
 
           {/* Custom File Upload Input */}
-          <div className="flex items-center gap-3 pt-1">
-            <label className="cursor-pointer py-2 px-3.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold border border-slate-200 transition flex items-center gap-1.5">
-              <Upload className="w-3.5 h-3.5 text-slate-500" />
-              <span>Upload Custom Photo</span>
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            <label className="cursor-pointer py-2.5 px-4 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold border border-blue-200 transition flex items-center gap-2 shadow-xs">
+              <Upload className="w-4 h-4 text-blue-600" />
+              <span>{isCompressingPhoto ? 'Compressing Image...' : 'Upload Device Photo'}</span>
               <input
                 type="file"
                 accept="image/*"
                 onChange={handleCustomPhotoUpload}
+                disabled={isCompressingPhoto}
                 className="hidden"
               />
             </label>
-            <span className="text-[11px] text-slate-400">JPG, PNG up to 10MB</span>
+            <span className="text-[11px] text-slate-500 font-medium">
+              Accepts phone camera photos (JPG, PNG, WebP) - automatically compressed for speed.
+            </span>
           </div>
         </div>
 
@@ -490,10 +639,20 @@ export const ReportFloodPage: React.FC = () => {
         <button
           type="submit"
           id="submit-flood-report-btn"
-          className="w-full py-4 px-6 rounded-2xl bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-base transition-all shadow-xl shadow-blue-600/30 hover:shadow-blue-600/50 flex items-center justify-center gap-2"
+          disabled={isSubmitting || isCompressingPhoto}
+          className="w-full py-4 px-6 rounded-2xl bg-blue-600 hover:bg-blue-500 disabled:bg-blue-400 text-white font-extrabold text-base transition-all shadow-xl shadow-blue-600/30 hover:shadow-blue-600/50 flex items-center justify-center gap-2 cursor-pointer"
         >
-          <Send className="w-5 h-5" />
-          Submit Flood Report &amp; Recalculate City Safe Routes
+          {isSubmitting ? (
+            <>
+              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              <span>Broadcasting Flood Report &amp; Syncing Routes...</span>
+            </>
+          ) : (
+            <>
+              <Send className="w-5 h-5" />
+              <span>Submit Flood Report &amp; Recalculate City Safe Routes</span>
+            </>
+          )}
         </button>
       </form>
     </div>

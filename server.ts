@@ -74,7 +74,8 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 // 0. Configuration & Environment Endpoint
 app.get('/api/config', (req: Request, res: Response) => {
@@ -339,56 +340,95 @@ app.post('/api/routes/calculate', async (req: Request, res: Response) => {
       return res.status(500).json({ error: 'Google Maps API key not configured' });
     }
 
-    const regionParam = requireIndiaOnly ? '&region=in' : '';
-    const directionsUrl = `https://maps.googleapis.com/maps/api/directions/json?origin=${oLat},${oLng}&destination=${dLat},${dLng}&alternatives=true${regionParam}&key=${apiKey}`;
-
-    const apiRes = await fetch(directionsUrl);
-    const data = await apiRes.json();
-
-    if (data.status !== 'OK' || !data.routes || data.routes.length === 0) {
-      return res.status(404).json({
-        error: requireIndiaOnly
-          ? 'No valid road route found within India between the selected locations.'
-          : 'No driving route found between these locations.',
-      });
+    let data: any = { status: 'ZERO_RESULTS', routes: [] };
+    try {
+      const regionParam = requireIndiaOnly ? '&region=in' : '';
+      const directionsUrl = `https://maps.googleapis.com/maps/api/directions/json?origin=${oLat},${oLng}&destination=${dLat},${dLng}&alternatives=true${regionParam}&key=${apiKey}`;
+      const apiRes = await fetch(directionsUrl);
+      if (apiRes.ok) {
+        data = await apiRes.json();
+      }
+    } catch (gErr) {
+      console.warn('Google Directions request notice:', gErr);
     }
 
     // Filter and sanitize routes against India geographic boundaries
     const validRoutes: any[] = [];
 
-    for (let i = 0; i < data.routes.length; i++) {
-      const r = data.routes[i];
-      const points = decodePolyline(r.overview_polyline.points);
+    if (data.status === 'OK' && Array.isArray(data.routes)) {
+      for (let i = 0; i < data.routes.length; i++) {
+        const r = data.routes[i];
+        const points = decodePolyline(r.overview_polyline.points);
 
-      // Enforce India-Only restriction: reject routes that exit India or enter Sri Lanka, etc.
-      if (requireIndiaOnly) {
-        const staysInIndia = isRouteContainedInIndia(points);
-        if (!staysInIndia) {
-          console.warn(`[Route Validation] Route alternative ${i} rejected: points outside Indian territory.`);
-          continue;
+        // Enforce India-Only restriction: reject routes that exit India or enter Sri Lanka, etc.
+        if (requireIndiaOnly) {
+          const staysInIndia = isRouteContainedInIndia(points);
+          if (!staysInIndia) {
+            console.warn(`[Route Validation] Route alternative ${i} rejected: points outside Indian territory.`);
+            continue;
+          }
         }
+
+        const leg = r.legs[0];
+        const distKm = parseFloat((leg.distance.value / 1000).toFixed(1));
+        const durationMins = Math.round(leg.duration.value / 60);
+
+        const steps = leg.steps.map((st: any) => ({
+          instruction: st.html_instructions ? st.html_instructions.replace(/<[^>]+>/g, ' ') : 'Proceed on roadway',
+          distanceKm: parseFloat((st.distance.value / 1000).toFixed(1)),
+          roadName: st.maneuver ? `${st.maneuver}` : 'Connected Roadway',
+          elevationMeters: 14.0,
+        }));
+
+        validRoutes.push({
+          id: i === 0 ? 'route-a' : i === 1 ? 'route-b' : `route-c`,
+          summary: r.summary || `Primary Highway Corridor`,
+          distanceKm: distKm,
+          estimatedMinutes: durationMins,
+          points,
+          steps,
+          bounds: r.bounds,
+        });
       }
+    }
 
-      const leg = r.legs[0];
-      const distKm = parseFloat((leg.distance.value / 1000).toFixed(1));
-      const durationMins = Math.round(leg.duration.value / 60);
+    // If Google Directions did not return valid routes, fall back to OSRM road routing engine
+    if (validRoutes.length === 0) {
+      try {
+        const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${oLng},${oLat};${dLng},${dLat}?overview=full&geometries=geojson&steps=true`;
+        const osrmRes = await fetch(osrmUrl);
+        if (osrmRes.ok) {
+          const osrmData = await osrmRes.json();
+          if (osrmData.code === 'Ok' && Array.isArray(osrmData.routes) && osrmData.routes.length > 0) {
+            for (let i = 0; i < osrmData.routes.length; i++) {
+              const osrmR = osrmData.routes[i];
+              const points = osrmR.geometry.coordinates.map((c: [number, number]) => ({ lat: c[1], lng: c[0] }));
+              if (requireIndiaOnly && !isRouteContainedInIndia(points)) {
+                continue;
+              }
+              const distKm = parseFloat((osrmR.distance / 1000).toFixed(1));
+              const durationMins = Math.round(osrmR.duration / 60);
+              const steps = (osrmR.legs?.[0]?.steps || []).map((st: any) => ({
+                instruction: st.maneuver?.type ? `${st.maneuver.type} onto ${st.name || 'connecting road'}` : 'Proceed on roadway',
+                distanceKm: parseFloat((st.distance / 1000).toFixed(1)),
+                roadName: st.name || 'Connected Roadway',
+                elevationMeters: 14.0,
+              }));
 
-      const steps = leg.steps.map((st: any) => ({
-        instruction: st.html_instructions ? st.html_instructions.replace(/<[^>]+>/g, ' ') : 'Proceed on roadway',
-        distanceKm: parseFloat((st.distance.value / 1000).toFixed(1)),
-        roadName: st.maneuver ? `${st.maneuver}` : 'Connected Roadway',
-        elevationMeters: 14.0,
-      }));
-
-      validRoutes.push({
-        id: i === 0 ? 'route-a' : i === 1 ? 'route-b' : `route-c`,
-        summary: r.summary || `Primary Highway Corridor`,
-        distanceKm: distKm,
-        estimatedMinutes: durationMins,
-        points,
-        steps,
-        bounds: r.bounds,
-      });
+              validRoutes.push({
+                id: i === 0 ? 'route-a' : i === 1 ? 'route-b' : `route-c`,
+                summary: osrmR.legs?.[0]?.summary || `India Highway Route`,
+                distanceKm: distKm,
+                estimatedMinutes: durationMins,
+                points,
+                steps,
+              });
+            }
+          }
+        }
+      } catch (osrmErr) {
+        console.warn('OSRM fallback error:', osrmErr);
+      }
     }
 
     if (validRoutes.length === 0) {

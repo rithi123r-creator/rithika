@@ -19,6 +19,8 @@ import {
   ZoomIn,
   ZoomOut,
   Compass,
+  HardDrive,
+  WifiOff,
 } from 'lucide-react';
 
 interface InteractiveMapProps {
@@ -61,7 +63,9 @@ const MapCameraSync: React.FC<{
   destination: { lat: number; lng: number };
   routePoints?: { lat: number; lng: number }[];
 }> = ({ origin, destination, routePoints }) => {
-  const map = useMap();
+  const mapWithId = useMap('google-flood-map');
+  const mapDefault = useMap();
+  const map = mapWithId || mapDefault;
 
   useEffect(() => {
     if (!map || typeof window === 'undefined' || !window.google?.maps) return;
@@ -70,12 +74,12 @@ const MapCameraSync: React.FC<{
       if (routePoints && routePoints.length > 0) {
         routePoints.forEach((p) => bounds.extend(p));
       } else {
-        bounds.extend(origin);
-        bounds.extend(destination);
+        bounds.extend({ lat: origin.lat, lng: origin.lng });
+        bounds.extend({ lat: destination.lat, lng: destination.lng });
       }
-      map.fitBounds(bounds, { top: 60, right: 60, bottom: 60, left: 60 });
-    } catch {
-      // fallback
+      map.fitBounds(bounds, { top: 75, right: 75, bottom: 75, left: 75 });
+    } catch (err) {
+      console.warn('Map bounds fit notice:', err);
     }
   }, [map, origin.lat, origin.lng, destination.lat, destination.lng, routePoints]);
 
@@ -119,6 +123,9 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
     setInspectionPoint,
     routeError,
     isCalculatingRoutes,
+    isNetworkOnline,
+    isSimulatedOffline,
+    activeOfflineRouteId,
   } = useHydro();
 
   const isMapsApiLoaded = useApiIsLoaded();
@@ -291,6 +298,12 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
           <span className="text-[11px] px-2 py-0.5 rounded-md bg-blue-950 text-blue-300 border border-blue-800/80 font-medium hidden sm:inline-flex">
             Telemetry: {rainfallMmHr} mm/h rain
           </span>
+          {(activeOfflineRouteId || isSimulatedOffline || !isNetworkOnline) && (
+            <span className="text-[10px] px-2.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold flex items-center gap-1 animate-pulse">
+              <HardDrive className="w-3 h-3 text-amber-400" />
+              <span>OFFLINE CACHED ROUTE</span>
+            </span>
+          )}
         </div>
 
         {/* Engine Switcher (Google Maps vs Tactical Vector) */}
@@ -580,61 +593,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
                   routePoints={activeSelectedRoutePoints}
                 />
 
-                {/* 1. Base Road Network Polylines (Tactical Blueprint Projection) */}
-                {roads.map((road) => {
-                  const path = road.pathCoordinates.map(svgToLatLng);
-                  const isDim = isRoadDimmed(road);
-                  const strokeColor = getStrokeColor(road);
-
-                  return (
-                    <React.Fragment key={road.id}>
-                      {/* Interactive Road Polyline */}
-                      <Polyline
-                        path={path}
-                        strokeColor={strokeColor}
-                        strokeOpacity={isDim ? 0.3 : 0.9}
-                        strokeWeight={road.category === 'highway' ? 7 : 5}
-                        onClick={() => setSelectedRoad(road)}
-                      />
-
-                      {/* High-Risk Road Marker with Subtle Pulse Animations */}
-                      {(road.riskLevel === 'high' || road.isBlocked) && (
-                        <AdvancedMarker
-                          position={svgToLatLng(road.midpoint)}
-                          onClick={() => setSelectedRoad(road)}
-                          zIndex={road.isBlocked ? 50 : 40}
-                        >
-                          <div className="relative flex items-center justify-center cursor-pointer group">
-                            {/* Subtle Sonar Pulse Waves */}
-                            <div className="absolute w-10 h-10 rounded-full bg-rose-500/30 animate-ping pointer-events-none" />
-                            <div className="absolute w-6 h-6 rounded-full bg-rose-500/40 animate-pulse pointer-events-none" />
-
-                            {/* Badge Node */}
-                            <div
-                              className={`relative px-2 py-0.5 rounded-full text-white font-extrabold text-[11px] shadow-lg border-2 flex items-center gap-1 transition-transform group-hover:scale-110 ${
-                                road.isBlocked
-                                  ? 'bg-rose-600 border-white ring-2 ring-rose-500/50'
-                                  : 'bg-red-500 border-red-200'
-                              }`}
-                            >
-                              {road.isBlocked ? '✕' : '⚠'}
-                              <span>{road.riskScore}</span>
-                            </div>
-
-                            {/* Blocked Tag Indicator */}
-                            {road.isBlocked && (
-                              <div className="absolute -bottom-5 whitespace-nowrap bg-rose-950/95 text-rose-200 border border-rose-500 text-[9px] font-bold px-1.5 py-0.2 rounded shadow-md pointer-events-none">
-                                BLOCKED
-                              </div>
-                            )}
-                          </div>
-                        </AdvancedMarker>
-                      )}
-                    </React.Fragment>
-                  );
-                })}
-
-                {/* 2. Active Route Path Overlay on Google Maps (Strictly ONE selected route displayed) */}
+                {/* 1. Strictly ONE Active Road Route Polyline (Google Directions / OSRM Verified within India) */}
                 {activeSelectedRoutePoints.length > 0 && selectedRoute && (
                   <>
                     <Polyline
@@ -647,7 +606,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
                           : '#3B82F6'
                       }
                       strokeOpacity={0.95}
-                      strokeWeight={8}
+                      strokeWeight={7}
                       onClick={() => setSelectedRouteId(selectedRoute.id)}
                     />
                     {activeSelectedRoutePoints.length > 1 && (
@@ -675,56 +634,6 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
                     )}
                   </>
                 )}
-
-                {/* 3. Emergency Resources & Shelters Pins */}
-                {activeLayer !== 'high_risk' &&
-                  emergencyResources.map((res) => {
-                    const isShelter = res.type === 'shelter';
-                    const isHospital = res.type === 'hospital';
-                    const pos = svgToLatLng(res.coordinates);
-
-                    return (
-                      <AdvancedMarker key={res.id} position={pos} zIndex={30}>
-                        <div className="flex flex-col items-center group cursor-pointer">
-                          <div
-                            className={`w-7 h-7 rounded-full flex items-center justify-center text-xs shadow-md border-2 border-white ${
-                              isShelter
-                                ? 'bg-blue-600'
-                                : isHospital
-                                ? 'bg-emerald-600'
-                                : 'bg-amber-600'
-                            }`}
-                          >
-                            {isShelter ? '⛺' : isHospital ? '🏥' : '🚒'}
-                          </div>
-                          <span className="mt-0.5 bg-slate-900/90 text-slate-200 border border-slate-700 px-1.5 py-0.2 rounded text-[9px] font-bold whitespace-nowrap shadow-xs">
-                            {res.name.split(' ')[0]}
-                          </span>
-                        </div>
-                      </AdvancedMarker>
-                    );
-                  })}
-
-                {/* 4. Citizen Flood Ground Reports */}
-                {citizenReports.slice(0, 5).map((rep) => {
-                  const road = roads.find((r) => r.id === rep.roadId);
-                  if (!road) return null;
-                  const pos = svgToLatLng({ x: road.midpoint.x - 15, y: road.midpoint.y - 30 });
-                  const isHigh = rep.waterLevel === 'high' || rep.isBlocked;
-
-                  return (
-                    <AdvancedMarker key={rep.id} position={pos} zIndex={35}>
-                      <div className="relative flex items-center justify-center">
-                        {isHigh && (
-                          <div className="absolute w-8 h-8 rounded-full bg-red-500/40 animate-ping pointer-events-none" />
-                        )}
-                        <div className="w-5 h-5 rounded-full bg-rose-600 text-white font-bold text-[10px] flex items-center justify-center border border-white shadow-md">
-                          !
-                        </div>
-                      </div>
-                    </AdvancedMarker>
-                  );
-                })}
 
                 {/* 5. Dynamic Origin & Destination Waypoints (Draggable) */}
                 <AdvancedMarker

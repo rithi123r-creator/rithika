@@ -88,6 +88,7 @@ export const LocationPickerInput: React.FC<LocationPickerInputProps> = ({
         const request: google.maps.places.AutocompleteRequest = {
           input: inputValue,
           sessionToken: sessionTokenRef.current,
+          includedRegionCodes: ['IN'],
         };
 
         placesLib.AutocompleteSuggestion.fetchAutocompleteSuggestions(request)
@@ -181,6 +182,15 @@ export const LocationPickerInput: React.FC<LocationPickerInputProps> = ({
       address: 'Madurai Bypass Junction, Tamil Nadu, India',
       sourceType: 'preset' as const,
     },
+    {
+      id: 'lm-bengaluru',
+      name: 'Bengaluru (Bangalore), Karnataka',
+      lat: 12.9716,
+      lng: 77.5946,
+      elevationMeters: 920.0,
+      address: 'Bengaluru Central, Karnataka, India',
+      sourceType: 'preset' as const,
+    },
   ];
 
   const filteredLandmarks = landmarkOptions.filter(
@@ -196,12 +206,42 @@ export const LocationPickerInput: React.FC<LocationPickerInputProps> = ({
     queryOrDescription: string,
     placeId?: string
   ): Promise<{ lat: number; lng: number; address: string } | null> => {
-    // 1. Check direct match in known preset landmarks
-    const matched = landmarkOptions.find(
-      (lm) =>
-        lm.name.toLowerCase().includes(queryOrDescription.toLowerCase()) ||
-        queryOrDescription.toLowerCase().includes(lm.name.toLowerCase())
-    );
+    const qClean = queryOrDescription.trim().toLowerCase();
+
+    // 1. Direct dictionary lookup for major Indian cities to avoid substring mis-matches
+    const majorCities: Record<string, { lat: number; lng: number; address: string }> = {
+      kumbakonam: { lat: 10.9602, lng: 79.3845, address: 'Kumbakonam, Tamil Nadu, India' },
+      trichy: { lat: 10.8062, lng: 78.6846, address: 'Tiruchirappalli (Trichy), Tamil Nadu, India' },
+      tiruchirappalli: { lat: 10.8062, lng: 78.6846, address: 'Tiruchirappalli (Trichy), Tamil Nadu, India' },
+      tiruchi: { lat: 10.8062, lng: 78.6846, address: 'Tiruchirappalli (Trichy), Tamil Nadu, India' },
+      thanjavur: { lat: 10.7870, lng: 79.1378, address: 'Thanjavur, Tamil Nadu, India' },
+      tanjore: { lat: 10.7870, lng: 79.1378, address: 'Thanjavur, Tamil Nadu, India' },
+      chennai: { lat: 13.0827, lng: 80.2707, address: 'Chennai Central, Tamil Nadu, India' },
+      madras: { lat: 13.0827, lng: 80.2707, address: 'Chennai Central, Tamil Nadu, India' },
+      coimbatore: { lat: 11.0168, lng: 76.9558, address: 'Coimbatore, Tamil Nadu, India' },
+      kovai: { lat: 11.0168, lng: 76.9558, address: 'Coimbatore, Tamil Nadu, India' },
+      madurai: { lat: 9.9252, lng: 78.1198, address: 'Madurai, Tamil Nadu, India' },
+      bengaluru: { lat: 12.9716, lng: 77.5946, address: 'Bengaluru, Karnataka, India' },
+      bangalore: { lat: 12.9716, lng: 77.5946, address: 'Bengaluru, Karnataka, India' },
+      salem: { lat: 11.6643, lng: 78.1460, address: 'Salem, Tamil Nadu, India' },
+      tirunelveli: { lat: 8.7139, lng: 77.7567, address: 'Tirunelveli, Tamil Nadu, India' },
+      vellore: { lat: 12.9165, lng: 79.1325, address: 'Vellore, Tamil Nadu, India' },
+      puducherry: { lat: 11.9416, lng: 79.8083, address: 'Puducherry, India' },
+      pondicherry: { lat: 11.9416, lng: 79.8083, address: 'Puducherry, India' },
+    };
+
+    for (const [key, coords] of Object.entries(majorCities)) {
+      const reg = new RegExp(`(^|\\s|,)${key}($|\\s|,)`, 'i');
+      if (reg.test(qClean)) {
+        return coords;
+      }
+    }
+
+    // 2. Direct exact or prefix match in preset landmarks
+    const matched = landmarkOptions.find((lm) => {
+      const lmName = lm.name.toLowerCase();
+      return lmName === qClean || lmName.startsWith(qClean) || qClean.startsWith(lmName);
+    });
     if (matched) {
       return {
         lat: matched.lat,
@@ -210,7 +250,7 @@ export const LocationPickerInput: React.FC<LocationPickerInputProps> = ({
       };
     }
 
-    // 2. Query backend geocode endpoint (/api/geocode?address=...) which uses official Google Geocoding API with region=in
+    // 3. Query backend geocode endpoint (/api/geocode?address=...) which uses official Google Geocoding API with region=in
     try {
       const resp = await fetch(`/api/geocode?address=${encodeURIComponent(queryOrDescription)}`);
       if (resp.ok) {
@@ -227,13 +267,13 @@ export const LocationPickerInput: React.FC<LocationPickerInputProps> = ({
       console.warn('Backend geocode fetch notice:', e);
     }
 
-    // 3. Fallback: Google Maps client-side Geocoder if loaded
+    // 4. Fallback: Google Maps client-side Geocoder if loaded
     if (typeof window !== 'undefined' && window.google?.maps?.Geocoder) {
       try {
         const geocoder = new window.google.maps.Geocoder();
         const request: google.maps.GeocoderRequest = placeId
           ? { placeId }
-          : { address: queryOrDescription, region: 'in' };
+          : { address: `${queryOrDescription}, India`, region: 'in', componentRestrictions: { country: 'IN' } };
         const res = await geocoder.geocode(request);
         if (res.results && res.results[0] && res.results[0].geometry) {
           const loc = res.results[0].geometry.location;
@@ -294,21 +334,24 @@ export const LocationPickerInput: React.FC<LocationPickerInputProps> = ({
     const resolved = await resolveLocationCoordinates(sug.description, sug.placeId);
     setIsResolvingLocation(false);
 
-    const lat = resolved ? resolved.lat : currentPoint.lat;
-    const lng = resolved ? resolved.lng : currentPoint.lng;
-    const elev = Math.max(
-      12.0,
-      Math.round((28 + Math.sin(lat * 10) * 8 + Math.cos(lng * 10) * 6) * 10) / 10
-    );
+    if (resolved) {
+      const elev = Math.max(
+        12.0,
+        Math.round((28 + Math.sin(resolved.lat * 10) * 8 + Math.cos(resolved.lng * 10) * 6) * 10) / 10
+      );
 
-    handleSelectLocation({
-      name: sug.description,
-      lat,
-      lng,
-      sourceType: 'custom_search',
-      address: resolved?.address || sug.description,
-      elevationMeters: elev,
-    });
+      handleSelectLocation({
+        name: sug.description,
+        lat: resolved.lat,
+        lng: resolved.lng,
+        sourceType: 'custom_search',
+        address: resolved.address || sug.description,
+        elevationMeters: elev,
+      });
+    } else {
+      // If direct resolution was inconclusive, keep name and attempt backend geocoding
+      handleCustomTextSubmit();
+    }
   };
 
   const handlePickOnMap = () => {

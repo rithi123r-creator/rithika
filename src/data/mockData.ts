@@ -397,6 +397,15 @@ export const SAMPLE_PRESET_ORIGINS: LocationPoint[] = [
     address: 'Kumbakonam Central, Thanjavur District, Tamil Nadu, India',
   },
   {
+    id: 'loc-trichy',
+    name: 'Trichy (Tiruchirappalli), Tamil Nadu',
+    lat: 10.8062,
+    lng: 78.6846,
+    elevationMeters: 88.0,
+    sourceType: 'preset',
+    address: 'Tiruchirappalli Junction, Tamil Nadu, India',
+  },
+  {
     id: 'loc-chennai',
     name: 'Chennai Central, Tamil Nadu',
     lat: 13.0827,
@@ -436,6 +445,15 @@ export const SAMPLE_PRESET_DESTINATIONS: LocationPoint[] = [
     address: 'Tiruchirappalli Junction, Tamil Nadu, India',
   },
   {
+    id: 'dest-kumbakonam',
+    name: 'Kumbakonam, Tamil Nadu',
+    lat: 10.9602,
+    lng: 79.3845,
+    elevationMeters: 26.0,
+    sourceType: 'preset',
+    address: 'Kumbakonam Highway Hub, Tamil Nadu, India',
+  },
+  {
     id: 'dest-thanjavur',
     name: 'Thanjavur, Tamil Nadu',
     lat: 10.7870,
@@ -461,5 +479,14 @@ export const SAMPLE_PRESET_DESTINATIONS: LocationPoint[] = [
     elevationMeters: 136.0,
     sourceType: 'preset',
     address: 'Madurai Bypass Relief Center, Tamil Nadu, India',
+  },
+  {
+    id: 'dest-chennai',
+    name: 'Chennai Central, Tamil Nadu',
+    lat: 13.0827,
+    lng: 80.2707,
+    elevationMeters: 8.0,
+    sourceType: 'preset',
+    address: 'Chennai Central Corridor, Tamil Nadu, India',
   },
 ];
