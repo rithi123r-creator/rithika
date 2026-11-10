@@ -63,6 +63,11 @@ export interface RouteStep {
   riskLevel: RiskLevel;
   hazardNote?: string;
   elevationMeters: number;
+  points?: { lat: number; lng: number }[];
+  isBlocked?: boolean;
+  waterLevel?: WaterLevel;
+  startLocation?: { lat: number; lng: number };
+  endLocation?: { lat: number; lng: number };
 }
 
 export interface RouteOption {

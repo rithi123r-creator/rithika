@@ -41,6 +41,28 @@ export const svgToLatLng = (pt: { x: number; y: number }): google.maps.LatLngLit
   return { lat, lng };
 };
 
+// Projects schematic road network coordinates dynamically onto the map anchor
+export const projectPtToMap = (
+  pt: { x: number; y: number },
+  origin: { lat: number; lng: number },
+  dest: { lat: number; lng: number }
+): google.maps.LatLngLiteral => {
+  const centerLat = (origin.lat + dest.lat) / 2;
+  const centerLng = (origin.lng + dest.lng) / 2;
+  const distFromMetro = Math.hypot(centerLat - METRO_CENTER.lat, centerLng - METRO_CENTER.lng);
+  if (distFromMetro < 1.0) {
+    return svgToLatLng(pt);
+  }
+  const spanLat = Math.max(0.12, Math.abs(dest.lat - origin.lat) * 0.9);
+  const spanLng = Math.max(0.16, Math.abs(dest.lng - origin.lng) * 0.9);
+  return {
+    lat: Number(((centerLat + spanLat * 0.5) - (pt.y / 680) * spanLat).toFixed(5)),
+    lng: Number(((centerLng - spanLng * 0.5) + (pt.x / 1000) * spanLng).toFixed(5)),
+  };
+};
+
+export type MapRiskLayer = 'all' | 'risk_hazards' | 'high_risk' | 'moderate_risk' | 'shelters';
+
 // Inverse Projection: Translates real Geographic LatLng coordinates to schematic (0-1000, 0-680)
 export const latLngToSvg = (coord: { lat: number; lng: number }): { x: number; y: number } => {
   const y = ((11.2 - coord.lat) / 0.5) * 680;
@@ -136,7 +158,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
   const [mapEngine, setMapEngine] = useState<'google_maps' | 'vector_topo'>('google_maps');
   const [googleMapType, setGoogleMapType] = useState<'roadmap' | 'satellite' | 'terrain'>('roadmap');
   const [zoomLevel, setZoomLevel] = useState<number>(1);
-  const [activeLayer, setActiveLayer] = useState<'all' | 'high_risk' | 'routes' | 'shelters'>('all');
+  const [activeLayer, setActiveLayer] = useState<MapRiskLayer>('all');
   const [hoveredRoad, setHoveredRoad] = useState<RoadSegment | null>(null);
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number } | null>(null);
 
@@ -186,7 +208,10 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
   };
 
   const isRoadDimmed = (road: RoadSegment) => {
+    if (activeLayer === 'risk_hazards') return road.riskLevel === 'low';
     if (activeLayer === 'high_risk') return road.riskLevel !== 'high';
+    if (activeLayer === 'moderate_risk') return road.riskLevel !== 'moderate';
+    if (activeLayer === 'shelters') return true;
     return false;
   };
 
@@ -283,6 +308,38 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
     return [];
   }, [selectedRoute]);
 
+  // Monitored Road Segments projected dynamically onto map coordinates
+  const roadGeoData = useMemo(() => {
+    return roads.map((road) => {
+      const geoPoints = road.pathCoordinates.map((pt) =>
+        projectPtToMap(pt, originPoint, destinationPoint)
+      );
+      const midpointGeo = projectPtToMap(road.midpoint, originPoint, destinationPoint);
+      return {
+        road,
+        geoPoints,
+        midpointGeo,
+      };
+    });
+  }, [roads, originPoint, destinationPoint]);
+
+  // High Risk & Moderate Risk collections from active road route
+  const highRiskRoads = useMemo(() => roads.filter((r) => r.riskLevel === 'high'), [roads]);
+  const moderateRiskRoads = useMemo(() => roads.filter((r) => r.riskLevel === 'moderate'), [roads]);
+  const safeRoads = useMemo(() => roads.filter((r) => r.riskLevel === 'low'), [roads]);
+
+  // Real road-aligned step hazards from the active calculated Google Directions route
+  const activeRouteHighRiskSteps = useMemo(() => {
+    return selectedRoute?.steps?.filter((s) => s.riskLevel === 'high') || [];
+  }, [selectedRoute]);
+
+  const activeRouteModerateRiskSteps = useMemo(() => {
+    return selectedRoute?.steps?.filter((s) => s.riskLevel === 'moderate') || [];
+  }, [selectedRoute]);
+
+  const activeHighRiskCount = activeRouteHighRiskSteps.length > 0 ? activeRouteHighRiskSteps.length : highRiskRoads.length;
+  const activeModerateRiskCount = activeRouteModerateRiskSteps.length > 0 ? activeRouteModerateRiskSteps.length : moderateRiskRoads.length;
+
   return (
     <div
       id="hydro-interactive-map-container"
@@ -366,7 +423,7 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
           )}
 
           {/* Layer Filter Toggles */}
-          <div className="flex items-center gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-[11px]">
+          <div className="flex flex-wrap items-center gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-[11px]">
             <button
               id="layer-all-btn"
               onClick={() => setActiveLayer('all')}
@@ -375,8 +432,25 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
                   ? 'bg-blue-600 text-white shadow-xs'
                   : 'text-slate-400 hover:text-white'
               }`}
+              title="Show all road network lines"
             >
               All Roads
+            </button>
+            <button
+              id="layer-risk-hazards-btn"
+              onClick={() => setActiveLayer('risk_hazards')}
+              className={`px-2.5 py-1 rounded-lg font-bold transition flex items-center gap-1.5 ${
+                activeLayer === 'risk_hazards'
+                  ? 'bg-gradient-to-r from-orange-600 to-rose-600 text-white shadow-xs'
+                  : 'text-orange-400 hover:text-white'
+              }`}
+              title="Filter exclusively Moderate (Orange) and High (Red) risk road hazard lines"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-orange-400" />
+              <span>Moderate &amp; High Risk</span>
+              <span className="px-1.5 py-0.2 rounded-full bg-black/40 text-[9px] font-black text-orange-200">
+                {activeModerateRiskCount + activeHighRiskCount}
+              </span>
             </button>
             <button
               id="layer-high-risk-btn"
@@ -386,9 +460,29 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
                   ? 'bg-rose-600 text-white shadow-xs'
                   : 'text-slate-400 hover:text-white'
               }`}
+              title="Show only High Risk (Red) road segments"
             >
               <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-ping" />
-              High Risk
+              <span>High Risk (Red)</span>
+              <span className="px-1 py-0.2 rounded bg-rose-950 text-rose-300 text-[9px] font-bold">
+                {activeHighRiskCount}
+              </span>
+            </button>
+            <button
+              id="layer-moderate-risk-btn"
+              onClick={() => setActiveLayer('moderate_risk')}
+              className={`px-2.5 py-1 rounded-lg font-medium transition flex items-center gap-1 ${
+                activeLayer === 'moderate_risk'
+                  ? 'bg-orange-600 text-slate-950 font-bold shadow-xs'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+              title="Show only Moderate Risk (Orange) road segments"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-orange-400" />
+              <span>Moderate Risk (Orange)</span>
+              <span className="px-1 py-0.2 rounded bg-orange-950 text-orange-300 text-[9px] font-bold">
+                {activeModerateRiskCount}
+              </span>
             </button>
             <button
               id="layer-shelters-btn"
@@ -398,9 +492,10 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
                   ? 'bg-indigo-600 text-white shadow-xs'
                   : 'text-slate-400 hover:text-white'
               }`}
+              title="Display emergency rescue centers and evacuation shelters"
             >
               <Building2 className="w-3 h-3" />
-              Shelters
+              <span>Shelters</span>
             </button>
           </div>
 
@@ -593,47 +688,251 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
                   routePoints={activeSelectedRoutePoints}
                 />
 
-                {/* 1. Strictly ONE Active Road Route Polyline (Google Directions / OSRM Verified within India) */}
+                {/* 1. Base Road Alignment Halo (Dark background tracing exact route on Google Maps) */}
                 {activeSelectedRoutePoints.length > 0 && selectedRoute && (
-                  <>
+                  <Polyline
+                    path={activeSelectedRoutePoints}
+                    strokeColor="#020617"
+                    strokeOpacity={0.5}
+                    strokeWeight={11}
+                    zIndex={35}
+                  />
+                )}
+
+                {/* 2. REAL ROAD-BASED RISK LINES (SNAPPED EXACTLY ONTO GOOGLE MAPS ROADS) */}
+                {selectedRoute && selectedRoute.steps && selectedRoute.steps.length > 0 ? (
+                  selectedRoute.steps.map((step, idx) => {
+                    // Extract real road geometry coordinates for this exact step from Google Directions
+                    const stepCoords =
+                      step.points && step.points.length > 0
+                        ? step.points
+                        : activeSelectedRoutePoints.length > 0
+                        ? activeSelectedRoutePoints.slice(
+                            Math.floor((idx / selectedRoute.steps.length) * activeSelectedRoutePoints.length),
+                            Math.floor(((idx + 1) / selectedRoute.steps.length) * activeSelectedRoutePoints.length) + 1
+                          )
+                        : [];
+
+                    if (stepCoords.length === 0) return null;
+
+                    const isHigh = step.riskLevel === 'high';
+                    const isModerate = step.riskLevel === 'moderate';
+                    const isBlocked = Boolean(step.isBlocked);
+
+                    // Layer filtering
+                    if (activeLayer === 'high_risk' && !isHigh) return null;
+                    if (activeLayer === 'moderate_risk' && !isModerate) return null;
+                    if (activeLayer === 'risk_hazards' && !isHigh && !isModerate) return null;
+
+                    // Color System:
+                    // 🔴 High Risk: Red line (#EF4444 / #DC2626)
+                    // 🟠 Moderate Risk: Orange line (#F97316)
+                    // 🟢 Low Risk / Safe: Green line (#10B981)
+                    const strokeColor = isBlocked
+                      ? '#DC2626'
+                      : isHigh
+                      ? '#EF4444'
+                      : isModerate
+                      ? '#F97316'
+                      : '#10B981';
+
+                    const strokeWeight = isHigh ? 7 : isModerate ? 6 : 5;
+                    const strokeOpacity = activeLayer === 'shelters' ? 0.2 : 0.98;
+                    const zIndex = isBlocked ? 55 : isHigh ? 50 : isModerate ? 45 : 40;
+
+                    // Midpoint for road hazard marker
+                    const midCoord = stepCoords[Math.floor(stepCoords.length / 2)] || stepCoords[0];
+
+                    return (
+                      <React.Fragment key={`real-road-step-${selectedRoute.id}-${idx}-${step.roadName}`}>
+                        {/* Outer danger glow for high risk and blocked road segments */}
+                        {(isHigh || isBlocked) && (
+                          <Polyline
+                            path={stepCoords}
+                            strokeColor={isBlocked ? '#991B1B' : '#7F1D1D'}
+                            strokeOpacity={0.45}
+                            strokeWeight={strokeWeight + 4}
+                            zIndex={zIndex - 1}
+                          />
+                        )}
+
+                        {/* Real Road Polyline snapped to Google Maps road */}
+                        <Polyline
+                          path={stepCoords}
+                          strokeColor={strokeColor}
+                          strokeOpacity={strokeOpacity}
+                          strokeWeight={strokeWeight}
+                          zIndex={zIndex}
+                          onClick={() => {
+                            const detailRoad = {
+                              id: `route-step-${idx}`,
+                              name: step.roadName,
+                              code: `STEP-${idx + 1}`,
+                              category: 'arterial',
+                              fromLocation: 'Connected Waypoint',
+                              toLocation: 'Route Corridor',
+                              lengthKm: step.distanceKm,
+                              normalSpeedKmh: 50,
+                              elevationMeters: step.elevationMeters,
+                              drainageCapacity: isHigh ? 'low' : isModerate ? 'medium' : 'high',
+                              historicalFloodRisk: step.riskScore,
+                              roadCondition: isHigh ? 'poor' : 'good',
+                              waterLevel: step.waterLevel || (isHigh ? 'high' : isModerate ? 'medium' : 'none'),
+                              isBlocked,
+                              blockageReason: step.hazardNote,
+                              reportsCount: isHigh ? 9 : 1,
+                              riskScore: step.riskScore,
+                              riskLevel: step.riskLevel,
+                              pathCoordinates: [],
+                              midpoint: { x: 500, y: 340 },
+                              lastUpdated: 'Live telemetry',
+                            };
+                            setSelectedRoad(detailRoad as any);
+                          }}
+                        />
+
+                        {/* White dashed core line for blocked road segments */}
+                        {isBlocked && (
+                          <Polyline
+                            path={stepCoords}
+                            strokeColor="#FFFFFF"
+                            strokeOpacity={0.95}
+                            strokeWeight={2.5}
+                            zIndex={zIndex + 1}
+                          />
+                        )}
+
+                        {/* Interactive Risk Marker on Real Road Curve */}
+                        {(isHigh || isModerate) && activeLayer !== 'shelters' && (
+                          <AdvancedMarker
+                            position={midCoord}
+                            zIndex={zIndex + 10}
+                            onClick={() => {
+                              const detailRoad = {
+                                id: `route-step-${idx}`,
+                                name: step.roadName,
+                                code: `STEP-${idx + 1}`,
+                                category: 'arterial',
+                                fromLocation: 'Connected Waypoint',
+                                toLocation: 'Route Corridor',
+                                lengthKm: step.distanceKm,
+                                normalSpeedKmh: 50,
+                                elevationMeters: step.elevationMeters,
+                                drainageCapacity: isHigh ? 'low' : isModerate ? 'medium' : 'high',
+                                historicalFloodRisk: step.riskScore,
+                                roadCondition: isHigh ? 'poor' : 'good',
+                                waterLevel: step.waterLevel || (isHigh ? 'high' : isModerate ? 'medium' : 'none'),
+                                isBlocked,
+                                blockageReason: step.hazardNote,
+                                reportsCount: isHigh ? 9 : 1,
+                                riskScore: step.riskScore,
+                                riskLevel: step.riskLevel,
+                                pathCoordinates: [],
+                                midpoint: { x: 500, y: 340 },
+                                lastUpdated: 'Live telemetry',
+                              };
+                              setSelectedRoad(detailRoad as any);
+                            }}
+                          >
+                            <div className="cursor-pointer group flex flex-col items-center hover:scale-110 transition-transform select-none">
+                              <div
+                                className={`px-2 py-0.5 rounded-full text-[9px] font-black shadow-xl flex items-center gap-1.5 border-2 transition-all ${
+                                  isBlocked
+                                    ? 'bg-rose-950 text-rose-100 border-rose-500 ring-2 ring-rose-500/50 animate-pulse'
+                                    : isHigh
+                                    ? 'bg-red-950 text-red-100 border-red-500 ring-2 ring-red-500/30'
+                                    : 'bg-orange-950 text-orange-100 border-orange-500 ring-2 ring-orange-500/30'
+                                }`}
+                              >
+                                <span>{isBlocked ? '⛔' : isHigh ? '⚠' : '⚡'}</span>
+                                <span className="font-extrabold max-w-[140px] truncate">{step.roadName}</span>
+                                <span
+                                  className={`px-1.5 py-0.2 rounded font-mono text-[8px] font-black ${
+                                    isHigh ? 'bg-rose-600 text-white' : 'bg-orange-500 text-slate-950'
+                                  }`}
+                                >
+                                  {step.riskScore}
+                                </span>
+                              </div>
+                            </div>
+                          </AdvancedMarker>
+                        )}
+                      </React.Fragment>
+                    );
+                  })
+                ) : (
+                  // Fallback when steps are not yet partitioned: render active selected route polyline
+                  activeSelectedRoutePoints.length > 0 && selectedRoute && (
                     <Polyline
                       path={activeSelectedRoutePoints}
                       strokeColor={
                         selectedRoute.riskLevel === 'high'
                           ? '#EF4444'
-                          : selectedRoute.isRecommended
-                          ? '#10B981'
-                          : '#3B82F6'
+                          : selectedRoute.riskLevel === 'moderate'
+                          ? '#F97316'
+                          : '#10B981'
                       }
                       strokeOpacity={0.95}
-                      strokeWeight={7}
-                      onClick={() => setSelectedRouteId(selectedRoute.id)}
+                      strokeWeight={6}
+                      zIndex={40}
                     />
-                    {activeSelectedRoutePoints.length > 1 && (
+                  )
+                )}
+
+                {/* 3. Overall Route Summary Callout Pill at Route Center */}
+                {activeSelectedRoutePoints.length > 1 && selectedRoute && (
+                  <AdvancedMarker
+                    position={activeSelectedRoutePoints[Math.floor(activeSelectedRoutePoints.length / 2)]}
+                    zIndex={60}
+                    onClick={() => setSelectedRouteId(selectedRoute.id)}
+                  >
+                    <div
+                      className={`px-2.5 py-1 rounded-md text-[10px] font-extrabold shadow-xl flex items-center gap-1.5 cursor-pointer transition-transform hover:scale-105 border-2 ${
+                        selectedRoute.isRecommended
+                          ? 'bg-emerald-950 text-emerald-100 border-emerald-400 ring-2 ring-emerald-500/50'
+                          : selectedRoute.riskLevel === 'high'
+                          ? 'bg-red-950 text-red-100 border-red-400 ring-2 ring-red-500/50'
+                          : selectedRoute.riskLevel === 'moderate'
+                          ? 'bg-orange-950 text-orange-100 border-orange-400 ring-2 ring-orange-500/50'
+                          : 'bg-blue-950 text-blue-100 border-blue-400'
+                      }`}
+                    >
+                      <span>{selectedRoute.isRecommended ? '★' : '⚠'}</span>
+                      <span>{selectedRoute.name}</span>
+                      <span className="opacity-80 font-normal">
+                        ({selectedRoute.distanceKm} km · {selectedRoute.estimatedMinutes} min)
+                      </span>
+                    </div>
+                  </AdvancedMarker>
+                )}
+
+                {/* 3. Emergency Resources & Shelters on Google Maps */}
+                {(activeLayer === 'all' || activeLayer === 'shelters') &&
+                  emergencyResources.map((res) => {
+                    const shelterPos = projectPtToMap(res.coordinates, originPoint, destinationPoint);
+                    return (
                       <AdvancedMarker
-                        position={activeSelectedRoutePoints[Math.floor(activeSelectedRoutePoints.length / 2)]}
-                        zIndex={48}
-                        onClick={() => setSelectedRouteId(selectedRoute.id)}
+                        key={`geo-shelter-${res.id}`}
+                        position={shelterPos}
+                        zIndex={42}
                       >
                         <div
-                          className={`px-2.5 py-1 rounded-md text-[10px] font-extrabold shadow-xl flex items-center gap-1.5 cursor-pointer transition-transform hover:scale-105 border-2 ${
-                            selectedRoute.isRecommended
-                              ? 'bg-emerald-950 text-emerald-100 border-emerald-400 ring-2 ring-emerald-500/50'
-                              : selectedRoute.riskLevel === 'high'
-                              ? 'bg-red-950 text-red-100 border-red-400 ring-2 ring-red-500/50'
-                              : 'bg-blue-950 text-blue-100 border-blue-400'
-                          }`}
+                          className="cursor-pointer group flex flex-col items-center hover:scale-110 transition-transform"
+                          title={`${res.name} (${res.status === 'operational' ? 'Operational' : 'High Capacity'})`}
                         >
-                          <span>{selectedRoute.isRecommended ? '★' : '⚠'}</span>
-                          <span>{selectedRoute.name}</span>
-                          <span className="opacity-80 font-normal">
-                            ({selectedRoute.distanceKm} km · {selectedRoute.estimatedMinutes} min)
-                          </span>
+                          <div
+                            className={`w-6 h-6 rounded-full flex items-center justify-center text-white text-[11px] shadow-lg border-2 border-white ring-2 ${
+                              res.type === 'shelter'
+                                ? 'bg-blue-600 ring-blue-400/40'
+                                : 'bg-emerald-600 ring-emerald-400/40'
+                            }`}
+                          >
+                            {res.type === 'shelter' ? '⛺' : '🏥'}
+                          </div>
                         </div>
                       </AdvancedMarker>
-                    )}
-                  </>
-                )}
+                    );
+                  })}
 
                 {/* 5. Dynamic Origin & Destination Waypoints (Draggable) */}
                 <AdvancedMarker
@@ -910,6 +1209,35 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
                       </g>
                     )}
 
+                    {/* Subtle Pulse Animations for Moderate-Risk Road Markers */}
+                    {road.riskLevel === 'moderate' && (
+                      <g className="pointer-events-none">
+                        <circle
+                          cx={road.midpoint.x}
+                          cy={road.midpoint.y}
+                          r="11"
+                          fill="none"
+                          stroke="#F59E0B"
+                          strokeWidth="2"
+                        >
+                          <animate
+                            attributeName="r"
+                            values="11;22;28"
+                            dur="2.8s"
+                            repeatCount="indefinite"
+                            keyTimes="0;0.7;1"
+                          />
+                          <animate
+                            attributeName="opacity"
+                            values="0.75;0.2;0"
+                            dur="2.8s"
+                            repeatCount="indefinite"
+                            keyTimes="0;0.7;1"
+                          />
+                        </circle>
+                      </g>
+                    )}
+
                     {/* Road Code / Risk Score Badge */}
                     <circle
                       cx={road.midpoint.x}
@@ -1107,6 +1435,43 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
           </div>
         )}
 
+        {/* On-Map Floating Hazard Status HUD */}
+        <div className="absolute top-3 right-3 z-30 pointer-events-auto bg-slate-950/90 border border-slate-800 rounded-xl p-2.5 shadow-2xl backdrop-blur-md hidden sm:flex flex-col gap-1.5 text-[11px]">
+          <div className="flex items-center justify-between gap-3 text-slate-300 font-extrabold border-b border-slate-800/80 pb-1">
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+              <span>Road Risk Lines</span>
+            </span>
+            <span className="text-[10px] text-slate-400 font-normal">Active</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setActiveLayer(activeLayer === 'high_risk' ? 'all' : 'high_risk')}
+              className={`px-2 py-0.5 rounded-lg text-[10px] font-extrabold flex items-center gap-1 border transition ${
+                activeLayer === 'high_risk'
+                  ? 'bg-rose-600 text-white border-rose-400 shadow-xs'
+                  : 'bg-rose-950/70 text-rose-300 border-rose-800 hover:bg-rose-900'
+              }`}
+              title="Filter High Risk (Red) road lines on map"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+              <span>{activeHighRiskCount} High Risk (Red)</span>
+            </button>
+            <button
+              onClick={() => setActiveLayer(activeLayer === 'moderate_risk' ? 'all' : 'moderate_risk')}
+              className={`px-2 py-0.5 rounded-lg text-[10px] font-extrabold flex items-center gap-1 border transition ${
+                activeLayer === 'moderate_risk'
+                  ? 'bg-orange-600 text-slate-950 border-orange-300 shadow-xs'
+                  : 'bg-orange-950/70 text-orange-300 border-orange-800 hover:bg-orange-900'
+              }`}
+              title="Filter Moderate Risk (Orange) road lines on map"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-orange-400" />
+              <span>{activeModerateRiskCount} Moderate Risk (Orange)</span>
+            </button>
+          </div>
+        </div>
+
         {/* Floating Interactive Zoom & Fit Controls (Works for both Google Maps & Vector View) */}
         <div className="absolute bottom-4 left-4 flex flex-col gap-1.5 z-30">
           <button
@@ -1142,31 +1507,33 @@ export const InteractiveMap: React.FC<InteractiveMapProps> = ({
       {/* Synchronized Footer Legend */}
       <div className="bg-slate-950 px-4 py-2.5 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-300">
         <div className="flex flex-wrap items-center gap-4">
-          <span className="font-semibold text-slate-400">Risk Legend:</span>
+          <span className="font-semibold text-slate-400">Road Lines:</span>
 
-          <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-full bg-emerald-500 shadow-xs" />
-            <span className="text-emerald-400 font-medium">Safe (0-30)</span>
+          <div className="flex items-center gap-1.5" title="High risk flood road line (Red, score >60)">
+            <span className="w-3.5 h-2 rounded-full bg-rose-500 shadow-xs" />
+            <span className="text-rose-400 font-bold">🔴 High Risk (Red)</span>
           </div>
 
-          <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-full bg-amber-500 shadow-xs" />
-            <span className="text-amber-400 font-medium">Moderate (31-60)</span>
+          <div className="flex items-center gap-1.5" title="Moderate risk road line (Orange, score 31-60)">
+            <span className="w-3.5 h-2 rounded-full bg-orange-500 shadow-xs" />
+            <span className="text-orange-400 font-bold">🟠 Moderate Risk (Orange)</span>
           </div>
 
-          <div className="flex items-center gap-1.5">
-            <span className="relative flex h-3 w-3 items-center justify-center">
-              <span className="absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75 animate-ping" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500 shadow-xs" />
+          <div className="flex items-center gap-1.5" title="Low flood risk road line (Green)">
+            <span className="w-3.5 h-2 rounded-full bg-emerald-500 shadow-xs" />
+            <span className="text-emerald-400 font-bold">🟢 Safe Road (Green)</span>
+          </div>
+
+          <div className="flex items-center gap-1.5" title="Submerged or obstructed road">
+            <span className="w-3.5 h-3.5 rounded bg-rose-950 border border-rose-500 flex items-center justify-center text-[9px] text-white font-bold">
+              ⛔
             </span>
-            <span className="text-rose-400 font-medium">High Risk (61-100)</span>
+            <span className="text-rose-300 font-medium">Blocked Segment</span>
           </div>
 
-          <div className="flex items-center gap-1.5">
-            <span className="w-3.5 h-3.5 rounded bg-rose-900 border border-white flex items-center justify-center text-[9px] text-white font-bold">
-              ✕
-            </span>
-            <span className="text-rose-300 font-medium">Road Blocked</span>
+          <div className="flex items-center gap-1.5" title="Active selected navigation route corridor">
+            <span className="w-3.5 h-1.5 rounded-full bg-slate-900 border border-slate-500 shadow-xs" />
+            <span className="text-slate-300 font-medium">Route Alignment</span>
           </div>
         </div>
 

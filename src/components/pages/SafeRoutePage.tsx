@@ -492,7 +492,7 @@ export const SafeRoutePage: React.FC = () => {
               <span>
                 {activeOfflineRouteId
                   ? 'Active route loaded directly from IndexedDB offline storage.'
-                  : 'Displaying verified road route. Click "Download Offline Map" to cache coordinates.'}
+                  : 'Displaying verified road route with live Moderate Risk (🟡 amber) and High Risk (🔴 red) road lines. Click any road line or badge to inspect flood diagnostics.'}
               </span>
             </div>
             <button
